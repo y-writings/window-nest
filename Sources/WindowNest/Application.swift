@@ -7,6 +7,14 @@ struct WindowNestApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
+        MenuBarExtra("WindowNest", systemImage: "rectangle.stack") {
+            Button("Show WindowNest") { appDelegate.showOverlay() }
+            SettingsLink { Text("Settings…") }
+                .keyboardShortcut(",")
+            Divider()
+            Button("Quit WindowNest") { NSApp.terminate(nil) }
+                .keyboardShortcut("q")
+        }
         Settings { SettingsView(settings: appDelegate.settings) }
     }
 }

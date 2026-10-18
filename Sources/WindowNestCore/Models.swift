@@ -41,7 +41,7 @@ public enum PermissionState: Equatable, Sendable {
     case bothRequired
 }
 
-public enum BrowserScreen: Equatable, Sendable {
+public enum BrowserScreen: Hashable, Sendable {
     case applications
     case windows(applicationID: Int32)
 }

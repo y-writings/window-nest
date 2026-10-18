@@ -1,6 +1,7 @@
 #if os(macOS)
 import Carbon
 import Foundation
+import SwiftUI
 
 extension Notification.Name { static let shortcutDidChange = Notification.Name("shortcutDidChange") }
 
@@ -22,23 +23,26 @@ final class ShortcutSettings: ObservableObject {
     private func notify() { NotificationCenter.default.post(name: .shortcutDidChange, object: nil) }
 }
 
-@MainActor
 final class GlobalShortcut {
     private var hotKey: EventHotKeyRef?
     private var handler: EventHandlerRef?
-    private let action: () -> Void
+    private let action: @MainActor () -> Void
 
-    init(keyCode: UInt32, modifiers: UInt32, action: @escaping () -> Void) {
+    @MainActor
+    init(keyCode: UInt32, modifiers: UInt32, action: @escaping @MainActor () -> Void) {
         self.action = action
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         let pointer = Unmanaged.passUnretained(self).toOpaque()
         InstallEventHandler(GetApplicationEventTarget(), { _, _, data in
             guard let data else { return OSStatus(eventNotHandledErr) }
-            Unmanaged<GlobalShortcut>.fromOpaque(data).takeUnretainedValue().action()
+            // Application-target Carbon events are dispatched on the main event loop.
+            MainActor.assumeIsolated {
+                Unmanaged<GlobalShortcut>.fromOpaque(data).takeUnretainedValue().action()
+            }
             return noErr
         }, 1, &eventType, pointer, &handler)
         let signature = OSType(0x574E5354) // WNST
-        var identifier = EventHotKeyID(signature: signature, id: 1)
+        let identifier = EventHotKeyID(signature: signature, id: 1)
         RegisterEventHotKey(keyCode, modifiers, identifier, GetApplicationEventTarget(), 0, &hotKey)
     }
 

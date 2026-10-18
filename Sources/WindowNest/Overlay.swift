@@ -12,6 +12,7 @@ final class OverlayModel: ObservableObject {
     @Published var loading = false
     var dismiss: () -> Void = {}
     private let system: MacWindowSystem
+    private var thumbnailTask: Task<Void, Never>?
 
     init(system: MacWindowSystem) { self.system = system }
 
@@ -22,7 +23,7 @@ final class OverlayModel: ObservableObject {
         icons = snapshot.icons
         state.replaceApplications(snapshot.applications)
         loading = false
-        if case .windows = state.screen { await loadThumbnails() }
+        refreshThumbnails()
     }
 
     func send(_ command: NavigationCommand) {
@@ -30,7 +31,7 @@ final class OverlayModel: ObservableObject {
         let effect = state.handle(command)
         switch effect {
         case .none:
-            if priorScreen != state.screen, case .windows = state.screen { Task { await loadThumbnails() } }
+            if priorScreen != state.screen { refreshThumbnails() }
         case .dismiss: dismiss()
         case .refresh: Task { await reload() }
         case .activate(let id):
@@ -46,11 +47,24 @@ final class OverlayModel: ObservableObject {
         Task { await reload(prompt: true) }
     }
 
-    func openSettings() { system.openPrivacySettings() }
+    func openSettings() { system.openPrivacySettings(for: permission) }
 
-    private func loadThumbnails() async {
-        for window in state.visibleWindows where thumbnails[window.id] == nil {
-            thumbnails[window.id] = await system.thumbnail(for: window.id)
+    func cancelThumbnails() {
+        thumbnailTask?.cancel()
+        thumbnailTask = nil
+    }
+
+    private func refreshThumbnails() {
+        cancelThumbnails()
+        thumbnails = [:]
+        let windows = state.visibleWindows
+        thumbnailTask = Task {
+            for window in windows {
+                guard !Task.isCancelled else { return }
+                let image = await system.thumbnail(for: window.id)
+                guard !Task.isCancelled else { return }
+                thumbnails[window.id] = image
+            }
         }
     }
 }
@@ -78,11 +92,12 @@ final class OverlayPanelController {
 
     func present() {
         guard !panel.isVisible else { close(); return }
+        model.state = BrowserState()
         panel.center()
         panel.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, let command = Self.command(for: event) else { return event }
+            guard let self, event.window === self.panel,
+                  let command = Self.command(for: event) else { return event }
             self.model.send(command)
             return nil
         }
@@ -90,6 +105,7 @@ final class OverlayPanelController {
     }
 
     private func close() {
+        model.cancelThumbnails()
         panel.orderOut(nil)
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor); self.keyMonitor = nil }
     }
@@ -117,7 +133,9 @@ struct OverlayView: View {
         VStack(alignment: .leading, spacing: 18) {
             header
             if model.permission != .ready { permissionView }
-            else if model.loading && model.state.applications.isEmpty { ProgressView("Finding windows…").frame(maxWidth: .infinity, maxHeight: .infinity) }
+            if model.permission == .accessibilityRequired || model.permission == .bothRequired {
+                Spacer()
+            } else if model.loading && model.state.applications.isEmpty { ProgressView("Finding windows…").frame(maxWidth: .infinity, maxHeight: .infinity) }
             else if model.state.applications.isEmpty { ContentUnavailableView("No Windows", systemImage: "macwindow", description: Text("Open a regular window on the current desktop.")) }
             else { cards }
             footer
@@ -139,18 +157,25 @@ struct OverlayView: View {
     }
 
     private var cards: some View {
-        ScrollView {
-            LazyVGrid(columns: columns, spacing: 16) {
-                if case .applications = model.state.screen {
-                    ForEach(Array(model.state.applications.enumerated()), id: \.element.id) { index, app in
-                        AppCard(app: app, icon: model.icons[app.id], selected: index == model.state.selectedIndex)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: 16) {
+                    if case .applications = model.state.screen {
+                        ForEach(Array(model.state.applications.enumerated()), id: \.element.id) { index, app in
+                            AppCard(app: app, icon: model.icons[app.id], selected: index == model.state.selectedIndex)
+                                .id(index)
+                        }
+                    } else {
+                        ForEach(Array(model.state.visibleWindows.enumerated()), id: \.element.id) { index, window in
+                            WindowCard(window: window, thumbnail: model.thumbnails[window.id], number: index < 9 ? index + 1 : nil, selected: index == model.state.selectedIndex)
+                                .id(index)
+                        }
                     }
-                } else {
-                    ForEach(Array(model.state.visibleWindows.enumerated()), id: \.element.id) { index, window in
-                        WindowCard(window: window, thumbnail: model.thumbnails[window.id], number: index < 9 ? index + 1 : nil, selected: index == model.state.selectedIndex)
-                    }
-                }
-            }.padding(4)
+                }.padding(4)
+            }
+            .id(model.state.screen)
+            .onAppear { proxy.scrollTo(model.state.selectedIndex) }
+            .onChange(of: model.state.selectedIndex) { _, index in proxy.scrollTo(index) }
         }
     }
 
@@ -165,7 +190,7 @@ struct OverlayView: View {
             Text("Permissions Required").font(.title2.bold())
             Text(permissionMessage).multilineTextAlignment(.center).foregroundStyle(.secondary)
             HStack { Button("Request Permissions") { model.requestPermissions() }; Button("Open System Settings") { model.openSettings() } }
-        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }.frame(maxWidth: .infinity)
     }
 
     private var permissionMessage: String {
