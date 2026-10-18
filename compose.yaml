@@ -1,0 +1,12 @@
+services:
+  dev:
+    build: .
+    volumes:
+      - ./Package.swift:/workspace/Package.swift:ro
+      - ./Sources:/workspace/Sources:ro
+      - ./Tests:/workspace/Tests:ro
+      - swift-build:/workspace/.build
+      - swift-cache:/root/.cache
+volumes:
+  swift-build:
+  swift-cache:
