@@ -13,13 +13,54 @@ WindowNest は、起動中のアプリを選び、次にそのアプリのウイ
 
 ## ビルドと起動
 
+macOS の Swift / Xcode ツールチェーンを使用します。
+
 ```bash
-make app
+mise run app
 open .build/WindowNest.app
 ```
 
-開発中は `swift build` と `swift test` も利用できます。
+| コマンド         | 内容                                        |
+| ---------------- | ------------------------------------------- |
+| `mise run build` | 開発用ビルド（`make build`）                |
+| `mise run test`  | 自動テスト（`make test`）                   |
+| `mise run app`   | Release ビルドと `.app` 作成・署名（macOS） |
+| `mise run clean` | ホストのビルド生成物を削除（`make clean`）  |
+
+mise がない場合は、従来どおり `make build` / `make test` / `make app` を利用できます。
+タスク実行時のツール自動インストールは無効にしています。共通の lint ツールが必要な場合は、明示的に `mise install` を実行してください。
+
 初回起動後、メニューバーの重なった四角形アイコンから WindowNest を表示できます。
+
+## Docker での開発
+
+Docker と Docker Compose を起動しておけば、ホストに Swift を追加せずに共通ロジックを開発・テストできます。
+公式の Swift 6.0.3 イメージを digest で固定しています。Apple Silicon / Intel の両方に対応します。
+
+```bash
+mise run docker:build
+mise run docker:test
+mise run docker:shell
+```
+
+各タスクは必要なイメージをビルドし、終了時にコンテナを削除します。
+ソースはホストのエディタで編集してください。`Package.swift`、`Sources/`、`Tests/` を読み取り専用でマウントするため、変更はコンテナ内にも反映されます。
+ビルド生成物とキャッシュは Docker の名前付き volume に保存し、ホストの `.build/` や Swift キャッシュとは共有しません。
+シェル内では `swift build` / `swift test` を実行できます。
+
+mise を使わずに実行することもできます。
+
+```bash
+docker compose run --build --rm dev swift build
+docker compose run --build --rm dev swift test
+docker compose run --build --rm dev bash
+```
+
+ビルド生成物・キャッシュとプロジェクトのコンテナを削除するには、`mise run docker:clean` を実行します。
+mise がない場合は `docker compose down --volumes` で削除できます。
+
+Docker 内で検証できるのは Linux 対応部分です。macOS 固有の UI、ウインドウ操作、画面収録はコンパイル・実行されません。
+`.app` の作成・署名と実機確認には、macOS 上のツールチェーンを使用してください。
 
 ## 権限設定
 
@@ -60,8 +101,10 @@ open .build/WindowNest.app
 ## テストと実機確認
 
 ```bash
-swift test
+mise run test
 ```
+
+Command Line Tools の環境で `TestingMacros` の読み込みエラーが出る場合は、`mise run docker:test` を利用してください。
 
 自動テストは、アプリ単位のグループ、2段階の状態遷移、矢印/数字選択、戻る操作、対象消失時の安全な選択更新、タイトルなし・取得不能時の位置照合、不一致・曖昧な候補の拒否を検証します。
 

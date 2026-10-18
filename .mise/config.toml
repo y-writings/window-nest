@@ -1,2 +1,36 @@
-# This TOML file contains project-specific settings.
-# Add project-specific information here.
+[settings]
+# Build tasks use the existing toolchain; Docker tasks only need Docker Compose.
+task.run_auto_install = false
+
+[tasks.build]
+description = "Build the Swift package with the host toolchain"
+run = "make build"
+
+[tasks.test]
+description = "Run Swift tests with the host toolchain"
+run = "make test"
+
+[tasks.app]
+description = "Build and ad-hoc sign WindowNest.app (macOS only)"
+run = "make app"
+
+[tasks.clean]
+description = "Clean host Swift build products"
+run = "make clean"
+
+[tasks."docker:build"]
+description = "Build the Swift package in Linux (excludes macOS UI)"
+run = "docker compose run --build --rm dev swift build"
+
+[tasks."docker:test"]
+description = "Run Swift tests in Docker"
+run = "docker compose run --build --rm dev swift test"
+
+[tasks."docker:shell"]
+description = "Open a development shell in Docker"
+raw = true
+run = "docker compose run --build --rm dev bash"
+
+[tasks."docker:clean"]
+description = "Remove this project's Docker containers and build/cache volumes"
+run = "docker compose down --volumes"
