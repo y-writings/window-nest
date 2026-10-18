@@ -212,6 +212,8 @@ struct OverlayView: View {
             Text("Permissions Required").font(.title2.bold())
             Text(permissionMessage).multilineTextAlignment(.center).foregroundStyle(.secondary)
             HStack { Button("Request Permissions") { model.requestPermissions() }; Button("Open System Settings") { model.openSettings() } }
+            Text("Already enabled? Quit WindowNest, remove it from the relevant permission lists in System Settings, add this copy of the app again, then relaunch.")
+                .font(.callout).multilineTextAlignment(.center).foregroundStyle(.secondary)
         }.frame(maxWidth: .infinity)
     }
 
