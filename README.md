@@ -79,13 +79,27 @@ Docker 内で検証できるのは Linux 対応部分です。macOS 固有の UI
 この状態は再起動だけでは解消しません。
 [Apple による説明](https://developer.apple.com/forums/thread/819406)も参照してください。
 
+設定画面での OFF / ON や削除・再追加でも直らない場合は、次の手順で古い権限登録をリセットします。
+
 1. メニューバーの **Quit WindowNest** からアプリを終了します。
-2. システム設定の **アクセシビリティ** と **画面収録とシステムオーディオ録音** の各一覧で、
-   WindowNest を選び、**−** ボタンで削除します。
+2. ターミナルで次の2つのコマンドを実行します。WindowNest のアクセシビリティと画面収録の許可だけをリセットします。
+
+   ```bash
+   tccutil reset Accessibility dev.ywritings.WindowNest
+   tccutil reset ScreenCapture dev.ywritings.WindowNest
+   ```
+
+   **両方のコマンドで `Successfully reset` と表示されたことを確認してください。**
+
+3. **システム設定 → プライバシーとセキュリティ**を開き、
+   **アクセシビリティ** と **画面収録とシステムオーディオ録音** の両方で WindowNest を許可し直します。
    macOS のバージョンによっては、アクセシビリティは **Device Control and Data Access** と表示されます。
-3. 各一覧の **＋** ボタンから、現在ビルドした `.build/WindowNest.app` を追加して許可します。
+   一覧にない場合は **＋** ボタンから、現在ビルドした `.build/WindowNest.app` を追加します。
    ファイル選択画面で **⌘⇧G** を押すと、アプリの場所を入力できます。
-4. `.build/WindowNest.app` を起動し直し、WindowNest の一覧を開きます。
+4. 再ビルドせず、許可した `.build/WindowNest.app` を起動し直し、アプリ一覧が表示されることを確認します。
+
+`No such bundle identifier` と表示された場合は、入力した ID が `dev.ywritings.WindowNest` と一致しているか確認してください。
+末尾の `t` まで含めて入力する必要があります。
 
 ### 再ビルド後も権限を維持する署名
 
