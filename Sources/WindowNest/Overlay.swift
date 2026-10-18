@@ -43,11 +43,15 @@ final class OverlayModel: ObservableObject {
     }
 
     func requestPermissions() {
+        dismiss()
         system.requestScreenRecording()
         Task { await reload(prompt: true) }
     }
 
-    func openSettings() { system.openPrivacySettings(for: permission) }
+    func openSettings() {
+        dismiss()
+        system.openPrivacySettings(for: permission)
+    }
 
     func cancelThumbnails() {
         thumbnailTask?.cancel()
@@ -81,6 +85,7 @@ final class OverlayPanelController {
         panel.level = .popUpMenu
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
+        panel.isMovableByWindowBackground = true
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.backgroundColor = .clear
@@ -131,6 +136,7 @@ struct OverlayView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
+            dragHandle
             header
             if model.permission != .ready { permissionView }
             if model.permission == .accessibilityRequired || model.permission == .bothRequired {
@@ -143,6 +149,22 @@ struct OverlayView: View {
         .padding(26)
         .frame(minWidth: 760, minHeight: 480)
         .background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 20))
+    }
+
+    private var dragHandle: some View {
+        ZStack {
+            WindowDragArea()
+            HStack(spacing: 6) {
+                Image(systemName: "line.3.horizontal")
+                Text("Drag to move")
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .allowsHitTesting(false)
+        }
+        .frame(maxWidth: .infinity, minHeight: 20)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Drag to move WindowNest")
     }
 
     private var header: some View {
@@ -199,6 +221,19 @@ struct OverlayView: View {
         case .screenRecordingRequired: "Enable Screen & System Audio Recording to show thumbnails."
         case .bothRequired: "Enable Accessibility and Screen & System Audio Recording, then reopen WindowNest."
         case .ready: ""
+        }
+    }
+}
+
+private struct WindowDragArea: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { DraggableView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class DraggableView: NSView {
+        override var mouseDownCanMoveWindow: Bool { true }
+
+        override func mouseDown(with event: NSEvent) {
+            window?.performDrag(with: event)
         }
     }
 }
