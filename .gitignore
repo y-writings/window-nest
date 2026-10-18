@@ -3,3 +3,7 @@
 .gh
 .opencode/plugins/entire.ts
 # end driftline
+
+# Swift Package Manager build products
+.build/
+.swiftpm/
