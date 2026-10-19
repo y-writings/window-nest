@@ -63,3 +63,75 @@ private func apps(_ count: Int) -> [ApplicationItem] {
     try store.save(.standard); #expect(store.load() == .standard)
     defaults.set(Data("broken".utf8), forKey: "navigationBindings"); #expect(store.load() == .standard)
 }
+
+@Test func tabAliasesConflictWithEveryGlobalModifierCombination() {
+    let combinations: [KeyModifiers] = [[.command, .option], [.control, .option], [.control, .command]]
+    for modifiers in combinations {
+        let global = KeyStroke(key: "tab", modifiers: modifiers)
+        for key in ["\t", "\u{19}", "tab"] {
+            let stroke = KeyStroke(key: key, modifiers: modifiers)
+            #expect(stroke == global)
+            let bindings = NavigationBindings(assignments: [.left: [KeySequence([stroke])]])
+            #expect(NavigationBindingValidator.validate(bindings, globalShortcut: global) == .globalShortcut(global))
+            #expect(NavigationBindingValidator.validate(bindings, globalShortcut: KeyStroke(key: "tab")) == nil)
+            let sequence = NavigationBindings(assignments: [.left: [KeySequence([KeyStroke(key: "g"), stroke])]])
+            #expect(NavigationBindingValidator.validate(sequence, globalShortcut: global) == .globalShortcut(global))
+        }
+    }
+}
+
+@Test func legacyTabBindingsAreNormalizedWhenLoaded() throws {
+    let suite = "WindowNestTests-\(UUID())"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let store = NavigationBindingsStore(defaults: defaults)
+    let tab = KeyStroke(key: "tab", modifiers: [.command, .option])
+    let bindings = NavigationBindings(assignments: [.left: [KeySequence([tab])]])
+    let encoded = try JSONEncoder().encode(bindings)
+    // Simulate data saved before Tab was canonicalized, rather than encoding a new stroke.
+    let legacyJSON = String(decoding: encoded, as: UTF8.self).replacingOccurrences(of: "\"tab\"", with: "\"\\t\"")
+    #expect(legacyJSON != String(decoding: encoded, as: UTF8.self))
+    defaults.set(Data(legacyJSON.utf8), forKey: "navigationBindings")
+    let loaded = store.load()
+    #expect(loaded == bindings)
+    #expect(NavigationBindingValidator.validate(loaded, globalShortcut: tab) == .globalShortcut(tab))
+    var matcher = NavigationKeyMatcher(bindings: loaded)
+    #expect(matcher.match(tab, at: 0) == .moveLeft)
+    try store.save(loaded)
+    #expect(store.load() == bindings)
+}
+
+@Test func changingRecordingLengthDiscardsThePartialSequence() {
+    var recording = NavigationKeyRecording()
+    recording.strokeCount = 2
+    #expect(recording.record(KeyStroke(key: "g")) == nil)
+    recording.strokeCount = 1
+    #expect(recording.strokes.isEmpty)
+    #expect(recording.record(KeyStroke(key: "h")) == KeySequence([KeyStroke(key: "h")]))
+    #expect(recording.strokes.isEmpty)
+    recording.strokeCount = 2
+    #expect(recording.record(KeyStroke(key: "j")) == nil)
+    #expect(recording.record(KeyStroke(key: "k")) == KeySequence([KeyStroke(key: "j"), KeyStroke(key: "k")]))
+    #expect(recording.strokes.isEmpty)
+}
+
+@Test func clearingAPartialRecordingStartsAFreshSequence() {
+    var recording = NavigationKeyRecording()
+    recording.strokeCount = 2
+    #expect(recording.record(KeyStroke(key: "g")) == nil)
+    recording.reset()
+    #expect(recording.strokes.isEmpty)
+    #expect(recording.record(KeyStroke(key: "h")) == nil)
+    #expect(recording.record(KeyStroke(key: "j")) == KeySequence([KeyStroke(key: "h"), KeyStroke(key: "j")]))
+    #expect(recording.strokes.isEmpty)
+    #expect(recording.record(KeyStroke(key: "k")) == nil)
+}
+
+@Test func rejectedRecordingDoesNotPreventTheNextRecording() throws {
+    var recording = NavigationKeyRecording()
+    let reserved = try #require(recording.record(KeyStroke(key: "1")))
+    let bindings = NavigationBindings(assignments: [.left: [reserved]])
+    #expect(NavigationBindingValidator.validate(bindings) == .reserved(KeyStroke(key: "1")))
+    #expect(recording.strokes.isEmpty)
+    #expect(recording.record(KeyStroke(key: "h")) == KeySequence([KeyStroke(key: "h")]))
+}

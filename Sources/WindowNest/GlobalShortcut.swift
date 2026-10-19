@@ -129,8 +129,7 @@ struct SettingsView: View {
 private struct NavigationBindingRow: View {
     @ObservedObject var settings: ShortcutSettings
     let action: NavigationAction
-    @State private var strokeCount = 1
-    @State private var recording: [KeyStroke] = []
+    @State private var recording = NavigationKeyRecording()
     private var title: String {
         switch action {
         case .left: "Left"; case .down: "Down"; case .up: "Up"; case .right: "Right"
@@ -142,15 +141,19 @@ private struct NavigationBindingRow: View {
             Text(title).frame(width: 80, alignment: .leading)
             Text((settings.navigationBindings.assignments[action] ?? []).map(\.description).joined(separator: ", ")).foregroundStyle(.secondary)
             Spacer()
-            Picker("", selection: $strokeCount) { Text("1 key").tag(1); Text("2 keys").tag(2) }.frame(width: 90)
-            KeyRecorder(active: recording.count < strokeCount) { stroke in
-                recording.append(stroke)
-                guard recording.count == strokeCount else { return }
+            Picker("", selection: $recording.strokeCount) { Text("1 key").tag(1); Text("2 keys").tag(2) }.frame(width: 90)
+            KeyRecorder(active: recording.strokes.count < recording.strokeCount) { stroke in
+                guard let sequence = recording.record(stroke) else { return }
                 var value = settings.navigationBindings
-                value.assignments[action, default: []].append(KeySequence(recording))
-                _ = settings.applyNavigationBindings(value); recording = []
+                value.assignments[action, default: []].append(sequence)
+                _ = settings.applyNavigationBindings(value)
             }.frame(width: 62, height: 24)
-            Button("Clear") { var value = settings.navigationBindings; value.assignments[action] = []; settings.applyNavigationBindings(value) }
+            Button("Clear") {
+                recording.reset()
+                var value = settings.navigationBindings
+                value.assignments[action] = []
+                settings.applyNavigationBindings(value)
+            }
         }
     }
 }
@@ -174,7 +177,7 @@ private struct KeyRecorder: NSViewRepresentable {
 
 extension NSEvent {
     var navigationStroke: KeyStroke? {
-        let special: [UInt16: String] = [123: "left", 124: "right", 125: "down", 126: "up", 36: "return", 76: "keypadEnter", 53: "escape"]
+        let special: [UInt16: String] = [123: "left", 124: "right", 125: "down", 126: "up", 36: "return", 76: "keypadEnter", 53: "escape", 48: "tab"]
         guard let key = special[keyCode] ?? charactersIgnoringModifiers, !key.isEmpty else { return nil }
         var modifiers: KeyModifiers = []
         let flags = modifierFlags.intersection(.deviceIndependentFlagsMask)

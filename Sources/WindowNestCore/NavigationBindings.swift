@@ -29,9 +29,16 @@ public struct KeyStroke: Codable, Hashable, Sendable, CustomStringConvertible {
     public let key: String
     public let modifiers: KeyModifiers
     public init(key: String, modifiers: KeyModifiers = []) {
+        let key = key == "\t" || key == "\u{19}" ? "tab" : key
         if key.count == 1, let scalar = key.unicodeScalars.first, CharacterSet.uppercaseLetters.contains(scalar) {
             self.key = key.lowercased(); self.modifiers = modifiers.union(.shift)
         } else { self.key = key; self.modifiers = modifiers }
+    }
+    private enum CodingKeys: String, CodingKey { case key, modifiers }
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(key: try values.decode(String.self, forKey: .key),
+                  modifiers: try values.decode(KeyModifiers.self, forKey: .modifiers))
     }
     public var description: String {
         let values: [(KeyModifiers, String)] = [(.control, "⌃"), (.option, "⌥"), (.shift, "⇧"), (.command, "⌘")]
@@ -43,6 +50,22 @@ public struct KeySequence: Codable, Hashable, Sendable, CustomStringConvertible 
     public let strokes: [KeyStroke]
     public init(_ strokes: [KeyStroke]) { self.strokes = strokes }
     public var description: String { strokes.map(\.description).joined(separator: " ") }
+}
+
+public struct NavigationKeyRecording: Sendable {
+    public var strokeCount = 1 {
+        didSet { if strokeCount != oldValue { reset() } }
+    }
+    public private(set) var strokes: [KeyStroke] = []
+    public init() {}
+    public mutating func reset() { strokes = [] }
+    public mutating func record(_ stroke: KeyStroke) -> KeySequence? {
+        strokes.append(stroke)
+        guard strokes.count == strokeCount else { return nil }
+        let sequence = KeySequence(strokes)
+        reset()
+        return sequence
+    }
 }
 
 public struct NavigationBindings: Codable, Equatable, Sendable {
