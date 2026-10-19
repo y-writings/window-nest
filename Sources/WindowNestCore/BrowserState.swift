@@ -71,8 +71,15 @@ public struct BrowserState: Equatable, Sendable {
         case .confirm:
             if case .applications = screen {
                 guard let application = visibleApplications[safe: selectedIndex] else { return .none }
-                screen = .windows(applicationID: application.id)
-                selectedIndex = 0
+                switch application.windows.count {
+                case 0:
+                    return .none
+                case 1:
+                    return .activate(application.windows[0].id)
+                default:
+                    screen = .windows(applicationID: application.id)
+                    selectedIndex = 0
+                }
             } else if let window = visibleWindows[safe: selectedIndex] {
                 return .activate(window.id)
             }

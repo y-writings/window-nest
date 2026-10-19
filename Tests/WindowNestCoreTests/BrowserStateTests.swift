@@ -14,12 +14,35 @@ private func fixtures() -> [ApplicationItem] {
     ]
 }
 
-@Test func entersSelectedApplicationWithoutActivatingAWindow() {
+@Test func confirmingSingleWindowApplicationActivatesItWithoutChangingScreens() {
     var state = BrowserState(applications: fixtures())
     #expect(state.handle(.moveRight) == .none)
+    #expect(state.screen == .applications)
+    #expect(state.handle(.confirm) == .activate(.init(processIdentifier: 2, windowNumber: 21)))
+    #expect(state.screen == .applications)
+    #expect(state.visibleWindows.isEmpty)
+}
+
+@Test func confirmingMultipleWindowApplicationEntersItsWindowList() {
+    var state = BrowserState(applications: fixtures())
     #expect(state.handle(.confirm) == .none)
-    #expect(state.screen == .windows(applicationID: 2))
-    #expect(state.visibleWindows.map(\.title) == ["Code"])
+    #expect(state.screen == .windows(applicationID: 1))
+    #expect(state.visibleWindows.map(\.title) == ["One", "Two"])
+}
+
+@Test func selectingSingleWindowApplicationDoesNotActivateIt() {
+    var state = BrowserState(applications: fixtures())
+    #expect(state.handle(.moveRight) == .none)
+    #expect(state.screen == .applications)
+    #expect(state.selectedApplication?.id == 2)
+}
+
+@Test func confirmingApplicationWithoutWindowsDoesNothing() {
+    var state = BrowserState(applications: [
+        ApplicationItem(id: 3, name: "Closed", windows: []),
+    ])
+    #expect(state.handle(.confirm) == .none)
+    #expect(state.screen == .applications)
 }
 
 @Test func escapeMovesBackThenDismisses() {
@@ -79,12 +102,12 @@ func searchExamples(name: String, query: String, fuzzy: Bool, prefix: Bool) {
     #expect(!ApplicationSearch.results(in: [item], query: query, mode: .prefix).isEmpty == prefix)
 }
 
-@Test func filteringKeepsNavigationAndReturnAlignedWithVisibleCards() {
+@Test func filteringConfirmsTheVisibleSingleWindowApplication() {
     var state = BrowserState(applications: fixtures())
     state.updateSearchQuery("dit")
     #expect(state.selectedApplication?.name == "Editor")
-    _ = state.handle(.confirm)
-    #expect(state.screen == .windows(applicationID: 2))
+    #expect(state.handle(.confirm) == .activate(.init(processIdentifier: 2, windowNumber: 21)))
+    #expect(state.screen == .applications)
 }
 
 @Test func searchChangesSelectFirstAndZeroResultsCannotConfirm() {
@@ -99,14 +122,17 @@ func searchExamples(name: String, query: String, fuzzy: Bool, prefix: Bool) {
 
 @Test func modeChangeInWindowsIsDeferredUntilReturning() {
     let apps = [ApplicationItem(id: 1, name: "1Password", windows: [
-        WindowItem(id: .init(processIdentifier: 1, windowNumber: 1), title: "Password")
+        WindowItem(id: .init(processIdentifier: 1, windowNumber: 1), title: "Password"),
+        WindowItem(id: .init(processIdentifier: 1, windowNumber: 2), title: "Settings"),
     ])]
     var state = BrowserState(applications: apps)
     state.updateSearchQuery("pass")
-    _ = state.handle(.confirm)
+    #expect(state.handle(.confirm) == .none)
+    _ = state.handle(.moveRight)
     state.updateSearchMode(.prefix)
     #expect(state.screen == .windows(applicationID: 1))
     #expect(state.selectedApplication?.id == 1)
+    #expect(state.handle(.confirm) == .activate(.init(processIdentifier: 1, windowNumber: 2)))
     _ = state.handle(.escape)
     #expect(state.searchQuery == "pass")
     #expect(state.visibleApplications.isEmpty)

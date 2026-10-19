@@ -1,5 +1,6 @@
 #if os(macOS)
 import AppKit
+import Combine
 import SwiftUI
 import WindowNestCore
 
@@ -78,7 +79,7 @@ final class OverlayPanelController {
     private let model: OverlayModel
     private let panel: NSPanel
     private var keyMonitor: Any?
-    private var searchModeObserver: NSObjectProtocol?
+    private var searchModeObserver: AnyCancellable?
 
     init(windowSystem: MacWindowSystem, settings: ShortcutSettings) {
         model = OverlayModel(system: windowSystem)
@@ -95,15 +96,16 @@ final class OverlayPanelController {
         panel.hasShadow = true
         panel.contentViewController = NSHostingController(rootView: OverlayView(model: model))
         model.dismiss = { [weak self] in self?.close() }
-        searchModeObserver = NotificationCenter.default.addObserver(forName: .applicationSearchModeDidChange, object: nil, queue: .main) { [weak self, weak settings] _ in
-            MainActor.assumeIsolated {
-                guard let mode = settings?.applicationSearchMode else { return }
-                self?.model.state.updateSearchMode(mode)
+        searchModeObserver = NotificationCenter.default
+            .publisher(for: .applicationSearchModeDidChange)
+            .sink { [weak self, weak settings] _ in
+                // ShortcutSettings posts search-mode changes on the main actor.
+                MainActor.assumeIsolated {
+                    guard let mode = settings?.applicationSearchMode else { return }
+                    self?.model.state.updateSearchMode(mode)
+                }
             }
-        }
     }
-
-    deinit { if let searchModeObserver { NotificationCenter.default.removeObserver(searchModeObserver) } }
 
     func present() {
         guard !panel.isVisible else { close(); return }
