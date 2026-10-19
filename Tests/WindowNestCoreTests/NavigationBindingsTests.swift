@@ -129,7 +129,8 @@ private func apps(_ count: Int) -> [ApplicationItem] {
 
 @Test func rejectedRecordingDoesNotPreventTheNextRecording() throws {
     var recording = NavigationKeyRecording()
-    let reserved = try #require(recording.record(KeyStroke(key: "1")))
+    let completed = recording.record(KeyStroke(key: "1"))
+    let reserved = try #require(completed)
     let bindings = NavigationBindings(assignments: [.left: [reserved]])
     #expect(NavigationBindingValidator.validate(bindings) == .reserved(KeyStroke(key: "1")))
     #expect(recording.strokes.isEmpty)
