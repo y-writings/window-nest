@@ -1,5 +1,6 @@
 #if os(macOS)
 import Carbon
+import Combine
 import Foundation
 import SwiftUI
 import WindowNestCore
@@ -7,18 +8,22 @@ import WindowNestCore
 extension Notification.Name { static let shortcutDidChange = Notification.Name("shortcutDidChange") }
 extension Notification.Name { static let navigationBindingsDidChange = Notification.Name("navigationBindingsDidChange") }
 
+struct GlobalShortcutConfiguration: Equatable {
+    var keyCode: UInt32
+    var modifiers: UInt32
+}
+
 @MainActor
 final class ShortcutSettings: ObservableObject {
-    @Published var keyCode: UInt32 {
-        didSet { defaults.set(Int(keyCode), forKey: "shortcutKeyCode"); notify() }
-    }
-    @Published var modifiers: UInt32 {
-        didSet { defaults.set(Int(modifiers), forKey: "shortcutModifiers"); notify() }
-    }
+    @Published private(set) var globalShortcut: GlobalShortcutConfiguration
+    var keyCode: UInt32 { globalShortcut.keyCode }
+    var modifiers: UInt32 { globalShortcut.modifiers }
     private let defaults: UserDefaults
     private let navigationStore: NavigationBindingsStore
     private let keyForVirtualKeyCode: @MainActor (UInt16) -> String?
+    private var layoutObserver: AnyCancellable?
     @Published private(set) var navigationBindings: NavigationBindings
+    @Published private(set) var activeNavigationBindings: NavigationBindings = .standard
     @Published var bindingError: String?
 
     init(defaults: UserDefaults = .standard,
@@ -27,8 +32,15 @@ final class ShortcutSettings: ObservableObject {
         self.keyForVirtualKeyCode = keyForVirtualKeyCode
         navigationStore = NavigationBindingsStore(defaults: defaults)
         navigationBindings = navigationStore.load()
-        keyCode = UInt32(defaults.object(forKey: "shortcutKeyCode") as? Int ?? kVK_ANSI_W)
-        modifiers = UInt32(defaults.object(forKey: "shortcutModifiers") as? Int ?? (cmdKey | optionKey))
+        globalShortcut = GlobalShortcutConfiguration(
+            keyCode: UInt32(defaults.object(forKey: "shortcutKeyCode") as? Int ?? kVK_ANSI_W),
+            modifiers: UInt32(defaults.object(forKey: "shortcutModifiers") as? Int ?? (cmdKey | optionKey)))
+        refreshActiveNavigationBindings()
+        layoutObserver = NotificationCenter.default.publisher(for: NSTextInputContext.keyboardSelectionDidChangeNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshActiveNavigationBindings() }
+            }
     }
 
     var globalKeyStroke: KeyStroke? {
@@ -52,15 +64,21 @@ final class ShortcutSettings: ObservableObject {
         return KeyStroke(key: key, modifiers: flags)
     }
 
-    func updateGlobal(keyCode newKeyCode: UInt32? = nil, modifiers newModifiers: UInt32? = nil) {
+    @discardableResult
+    func updateGlobal(keyCode newKeyCode: UInt32? = nil, modifiers newModifiers: UInt32? = nil) -> Bool {
         let candidateKey = newKeyCode ?? keyCode, candidateModifiers = newModifiers ?? modifiers
         guard let stroke = globalKeyStroke(keyCode: candidateKey, modifiers: candidateModifiers) else {
-            bindingError = "The current keyboard layout cannot translate this shortcut."; return
+            bindingError = "The current keyboard layout cannot translate this shortcut."; return false
         }
         if let conflict = NavigationBindingValidator.validate(navigationBindings, globalShortcut: stroke) {
-            bindingError = conflict.description; return
+            bindingError = conflict.description; return false
         }
-        keyCode = candidateKey; modifiers = candidateModifiers; bindingError = nil
+        globalShortcut = GlobalShortcutConfiguration(keyCode: candidateKey, modifiers: candidateModifiers)
+        defaults.set(Int(candidateKey), forKey: "shortcutKeyCode")
+        defaults.set(Int(candidateModifiers), forKey: "shortcutModifiers")
+        refreshActiveNavigationBindings()
+        notify()
+        return true
     }
 
     @discardableResult
@@ -73,10 +91,27 @@ final class ShortcutSettings: ObservableObject {
         }
         do {
             try navigationStore.save(value)
-            navigationBindings = value; bindingError = nil
-            NotificationCenter.default.post(name: .navigationBindingsDidChange, object: nil)
+            navigationBindings = value
+            refreshActiveNavigationBindings()
             return true
         } catch { bindingError = error.localizedDescription; return false }
+    }
+
+    func refreshActiveNavigationBindings() {
+        // A layout change can introduce conflicts without a settings edit. Keep the
+        // saved bindings intact and restore them automatically when the conflict clears.
+        if let globalKeyStroke {
+            activeNavigationBindings = NavigationBindings(assignments: navigationBindings.assignments.mapValues {
+                $0.filter { !$0.strokes.contains(globalKeyStroke) }
+            })
+            if activeNavigationBindings != navigationBindings {
+                bindingError = "\(globalKeyStroke) is the global shortcut on this keyboard layout. Conflicting cursor bindings are temporarily disabled; saved bindings are unchanged."
+            } else { bindingError = nil }
+        } else {
+            activeNavigationBindings = .standard
+            bindingError = "The current keyboard layout cannot translate the global shortcut. Custom cursor bindings are temporarily disabled; saved bindings are unchanged."
+        }
+        NotificationCenter.default.post(name: .navigationBindingsDidChange, object: nil)
     }
 
     private func notify() { NotificationCenter.default.post(name: .shortcutDidChange, object: nil) }
@@ -137,14 +172,7 @@ struct SettingsView: View {
     @ObservedObject var settings: ShortcutSettings
     var body: some View {
         Form {
-            Text("Global shortcut").font(.headline)
-            Picker("Key", selection: Binding(get: { settings.keyCode }, set: { settings.updateGlobal(keyCode: $0) })) {
-                Text("W").tag(UInt32(kVK_ANSI_W)); Text("Space").tag(UInt32(kVK_Space)); Text("Tab").tag(UInt32(kVK_Tab))
-            }
-            Picker("Modifiers", selection: Binding(get: { settings.modifiers }, set: { settings.updateGlobal(modifiers: $0) })) {
-                Text("⌘⌥").tag(UInt32(cmdKey | optionKey)); Text("⌃⌥").tag(UInt32(controlKey | optionKey)); Text("⌃⌘").tag(UInt32(controlKey | cmdKey))
-            }
-            Text("Changes are saved and take effect immediately.").foregroundStyle(.secondary)
+            GlobalShortcutControls(settings: settings)
             Divider()
             HStack {
                 Text("Cursor movement").font(.headline)

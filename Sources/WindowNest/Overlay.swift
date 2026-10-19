@@ -88,7 +88,7 @@ final class OverlayPanelController {
 
     init(windowSystem: MacWindowSystem, settings: ShortcutSettings) {
         self.settings = settings
-        matcher = NavigationKeyMatcher(bindings: settings.navigationBindings)
+        matcher = NavigationKeyMatcher(bindings: settings.activeNavigationBindings)
         model = OverlayModel(system: windowSystem)
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 920, height: 600), styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .popUpMenu
@@ -102,10 +102,10 @@ final class OverlayPanelController {
         panel.hasShadow = true
         panel.contentViewController = NSHostingController(rootView: OverlayView(model: model))
         model.dismiss = { [weak self] in self?.close() }
-        model.navigationBindings = settings.navigationBindings
+        model.navigationBindings = settings.activeNavigationBindings
         model.resetKeySequence = { [weak self] in self?.matcher.reset() }
         navigationObserver = NotificationCenter.default.addObserver(forName: .navigationBindingsDidChange, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { guard let self else { return }; self.matcher.update(self.settings.navigationBindings); self.model.navigationBindings = self.settings.navigationBindings }
+            MainActor.assumeIsolated { guard let self else { return }; self.matcher.update(self.settings.activeNavigationBindings); self.model.navigationBindings = self.settings.activeNavigationBindings }
         }
         resignObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.matcher.reset() }
