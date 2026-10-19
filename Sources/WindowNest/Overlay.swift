@@ -10,13 +10,16 @@ final class OverlayModel: ObservableObject {
     @Published var thumbnails: [WindowID: NSImage] = [:]
     @Published var permission: PermissionState = .ready
     @Published var loading = false
+    @Published var navigationBindings: NavigationBindings = .standard
     var dismiss: () -> Void = {}
+    var resetKeySequence: () -> Void = {}
     private let system: MacWindowSystem
     private var thumbnailTask: Task<Void, Never>?
 
     init(system: MacWindowSystem) { self.system = system }
 
     func reload(prompt: Bool = false) async {
+        resetKeySequence()
         loading = true
         let snapshot = await system.snapshot(promptForAccessibility: prompt)
         permission = snapshot.permission
@@ -78,8 +81,14 @@ final class OverlayPanelController {
     private let model: OverlayModel
     private let panel: NSPanel
     private var keyMonitor: Any?
+    private let settings: ShortcutSettings
+    private var matcher: NavigationKeyMatcher
+    private var navigationObserver: NSObjectProtocol?
+    private var resignObserver: NSObjectProtocol?
 
-    init(windowSystem: MacWindowSystem) {
+    init(windowSystem: MacWindowSystem, settings: ShortcutSettings) {
+        self.settings = settings
+        matcher = NavigationKeyMatcher(bindings: settings.navigationBindings)
         model = OverlayModel(system: windowSystem)
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 920, height: 600), styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .popUpMenu
@@ -93,6 +102,14 @@ final class OverlayPanelController {
         panel.hasShadow = true
         panel.contentViewController = NSHostingController(rootView: OverlayView(model: model))
         model.dismiss = { [weak self] in self?.close() }
+        model.navigationBindings = settings.navigationBindings
+        model.resetKeySequence = { [weak self] in self?.matcher.reset() }
+        navigationObserver = NotificationCenter.default.addObserver(forName: .navigationBindingsDidChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { guard let self else { return }; self.matcher.update(self.settings.navigationBindings); self.model.navigationBindings = self.settings.navigationBindings }
+        }
+        resignObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.matcher.reset() }
+        }
     }
 
     func present() {
@@ -101,21 +118,29 @@ final class OverlayPanelController {
         panel.center()
         panel.makeKeyAndOrderFront(nil)
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, event.window === self.panel,
-                  let command = Self.command(for: event) else { return event }
+            guard let self, event.window === self.panel else { return event }
+            let priorScreen = self.model.state.screen
+            let builtIn = Self.command(for: event)
+            if builtIn != nil { self.matcher.reset() }
+            let command = builtIn ?? event.navigationStroke.flatMap { self.matcher.match($0, at: event.timestamp, isRepeat: event.isARepeat) }
+            guard let command else { return event }
             self.model.send(command)
+            if priorScreen != self.model.state.screen { self.matcher.reset() }
             return nil
         }
         Task { await model.reload() }
     }
 
     private func close() {
+        matcher.reset()
         model.cancelThumbnails()
         panel.orderOut(nil)
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor); self.keyMonitor = nil }
     }
 
     private static func command(for event: NSEvent) -> NavigationCommand? {
+        let explicitModifiers: NSEvent.ModifierFlags = [.shift, .control, .option, .command]
+        guard event.modifierFlags.intersection(explicitModifiers).isEmpty else { return nil }
         switch event.keyCode {
         case 123: return .moveLeft
         case 124: return .moveRight
@@ -208,6 +233,8 @@ struct OverlayView: View {
     private var footer: some View {
         HStack {
             Text("← ↑ ↓ → Select   ⏎ Confirm   esc Back")
+            let custom = modelFooterBindings
+            if !custom.isEmpty { Text(custom) }
             if case .windows = model.state.screen {
                 Spacer()
                 Text("1–9 Quick select")
@@ -215,6 +242,13 @@ struct OverlayView: View {
         }
             .font(.caption).foregroundStyle(.secondary)
             .lineLimit(1)
+    }
+
+    private var modelFooterBindings: String {
+        return NavigationAction.allCases.compactMap { action in
+            let keys = model.navigationBindings.assignments[action, default: []].map(\.description).joined(separator: ",")
+            return keys.isEmpty ? nil : "\(keys):\(action.rawValue)"
+        }.joined(separator: "  ")
     }
 
     private var permissionView: some View {

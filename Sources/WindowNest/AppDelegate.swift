@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func showOverlay() {
-        if panel == nil { panel = OverlayPanelController(windowSystem: windowSystem) }
+        if panel == nil { panel = OverlayPanelController(windowSystem: windowSystem, settings: settings) }
         panel?.present()
     }
 }
