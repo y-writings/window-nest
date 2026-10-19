@@ -2,8 +2,12 @@
 import Carbon
 import Foundation
 import SwiftUI
+import WindowNestCore
 
-extension Notification.Name { static let shortcutDidChange = Notification.Name("shortcutDidChange") }
+extension Notification.Name {
+    static let shortcutDidChange = Notification.Name("shortcutDidChange")
+    static let applicationSearchModeDidChange = Notification.Name("applicationSearchModeDidChange")
+}
 
 @MainActor
 final class ShortcutSettings: ObservableObject {
@@ -13,11 +17,19 @@ final class ShortcutSettings: ObservableObject {
     @Published var modifiers: UInt32 {
         didSet { defaults.set(Int(modifiers), forKey: "shortcutModifiers"); notify() }
     }
+    @Published var applicationSearchMode: ApplicationSearchMode {
+        didSet {
+            searchModeStore.value = applicationSearchMode
+            NotificationCenter.default.post(name: .applicationSearchModeDidChange, object: nil)
+        }
+    }
     private let defaults = UserDefaults.standard
+    private let searchModeStore = ApplicationSearchModeStore()
 
     init() {
         keyCode = UInt32(defaults.object(forKey: "shortcutKeyCode") as? Int ?? kVK_ANSI_W)
         modifiers = UInt32(defaults.object(forKey: "shortcutModifiers") as? Int ?? (cmdKey | optionKey))
+        applicationSearchMode = searchModeStore.value
     }
 
     private func notify() { NotificationCenter.default.post(name: .shortcutDidChange, object: nil) }
@@ -64,6 +76,16 @@ struct SettingsView: View {
                 Text("⌘⌥").tag(UInt32(cmdKey | optionKey)); Text("⌃⌥").tag(UInt32(controlKey | optionKey)); Text("⌃⌘").tag(UInt32(controlKey | cmdKey))
             }
             Text("Changes are saved and take effect immediately.").foregroundStyle(.secondary)
+            Section("Application search") {
+                Picker("Matching", selection: $settings.applicationSearchMode) {
+                    Text("Fuzzy").tag(ApplicationSearchMode.fuzzy)
+                    Text("Prefix").tag(ApplicationSearchMode.prefix)
+                }
+                .pickerStyle(.radioGroup)
+                Text("Fuzzy finds characters in order, so ‘pass’ finds 1Password. Prefix only matches the beginning, so ‘pass’ does not; ‘1pa’ does.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }.padding(24).frame(width: 360)
     }
 }

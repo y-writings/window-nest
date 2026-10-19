@@ -1,5 +1,6 @@
 #if os(macOS)
 import AppKit
+import Combine
 import SwiftUI
 import WindowNestCore
 
@@ -78,9 +79,11 @@ final class OverlayPanelController {
     private let model: OverlayModel
     private let panel: NSPanel
     private var keyMonitor: Any?
+    private var searchModeObserver: AnyCancellable?
 
-    init(windowSystem: MacWindowSystem) {
+    init(windowSystem: MacWindowSystem, settings: ShortcutSettings) {
         model = OverlayModel(system: windowSystem)
+        model.state = BrowserState(searchMode: settings.applicationSearchMode)
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 920, height: 600), styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .popUpMenu
         panel.isFloatingPanel = true
@@ -93,16 +96,30 @@ final class OverlayPanelController {
         panel.hasShadow = true
         panel.contentViewController = NSHostingController(rootView: OverlayView(model: model))
         model.dismiss = { [weak self] in self?.close() }
+        searchModeObserver = NotificationCenter.default
+            .publisher(for: .applicationSearchModeDidChange)
+            .sink { [weak self, weak settings] _ in
+                // ShortcutSettings posts search-mode changes on the main actor.
+                MainActor.assumeIsolated {
+                    guard let mode = settings?.applicationSearchMode else { return }
+                    self?.model.state.updateSearchMode(mode)
+                }
+            }
     }
 
     func present() {
         guard !panel.isVisible else { close(); return }
-        model.state = BrowserState()
+        model.state = BrowserState(searchMode: model.state.searchMode)
         panel.center()
         panel.makeKeyAndOrderFront(nil)
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, event.window === self.panel,
-                  let command = Self.command(for: event) else { return event }
+            guard let self, event.window === self.panel else { return event }
+            if case .applications = self.model.state.screen,
+               let editor = self.panel.firstResponder as? NSTextView,
+               editor.hasMarkedText() { return event }
+            guard let command = Self.command(for: event) else { return event }
+            if case .applications = self.model.state.screen,
+               case .chooseNumber = command { return event }
             self.model.send(command)
             return nil
         }
@@ -132,6 +149,7 @@ final class OverlayPanelController {
 
 struct OverlayView: View {
     @ObservedObject var model: OverlayModel
+    @FocusState private var searchFocused: Bool
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
 
     var body: some View {
@@ -143,12 +161,17 @@ struct OverlayView: View {
                 Spacer()
             } else if model.loading && model.state.applications.isEmpty { ProgressView("Finding windows…").frame(maxWidth: .infinity, maxHeight: .infinity) }
             else if model.state.applications.isEmpty { ContentUnavailableView("No Windows", systemImage: "macwindow", description: Text("Open a regular window on the current desktop.")) }
+            else if case .applications = model.state.screen, model.state.visibleApplications.isEmpty {
+                ContentUnavailableView.search(text: model.state.searchQuery)
+            }
             else { cards }
             footer
         }
         .padding(20)
         .frame(minWidth: 760, minHeight: 480)
         .background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .onAppear { focusSearchIfNeeded() }
+        .onChange(of: model.state.screen) { _, _ in focusSearchIfNeeded() }
     }
 
     private var dragHandle: some View {
@@ -172,7 +195,28 @@ struct OverlayView: View {
             if case .windows(let id) = model.state.screen {
                 Button { model.send(.escape) } label: { Label("Applications", systemImage: "chevron.left") }.buttonStyle(.plain)
                 Text(model.state.applications.first { $0.id == id }?.name ?? "Windows").font(.title.bold())
-            } else { Text("Applications").font(.title.bold()) }
+            } else {
+                Text("Applications").font(.title.bold())
+                HStack(spacing: 4) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search applications", text: Binding(
+                        get: { model.state.searchQuery },
+                        set: { model.state.updateSearchQuery($0) }
+                    ))
+                    .textFieldStyle(.plain)
+                    .focused($searchFocused)
+                    if !model.state.searchQuery.isEmpty {
+                        Button { model.state.updateSearchQuery(""); searchFocused = true } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear search")
+                    }
+                }
+                .padding(.horizontal, 9).padding(.vertical, 6)
+                .frame(width: 260)
+                .background(.black.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+            }
             Spacer()
             if model.loading { ProgressView().controlSize(.small) }
         }
@@ -183,7 +227,7 @@ struct OverlayView: View {
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 12) {
                     if case .applications = model.state.screen {
-                        ForEach(Array(model.state.applications.enumerated()), id: \.element.id) { index, app in
+                        ForEach(Array(model.state.visibleApplications.enumerated()), id: \.element.id) { index, app in
                             AppCard(app: app, icon: model.icons[app.id], selected: index == model.state.selectedIndex)
                                 .id(index)
                         }
@@ -202,6 +246,18 @@ struct OverlayView: View {
                     proxy.scrollTo(index, anchor: .center)
                 }
             }
+            .onChange(of: model.state.searchQuery) { _, _ in
+                proxy.scrollTo(0, anchor: .top)
+            }
+            .onChange(of: model.state.searchMode) { _, _ in
+                if case .applications = model.state.screen { proxy.scrollTo(0, anchor: .top) }
+            }
+        }
+    }
+
+    private func focusSearchIfNeeded() {
+        if case .applications = model.state.screen {
+            DispatchQueue.main.async { searchFocused = true }
         }
     }
 
