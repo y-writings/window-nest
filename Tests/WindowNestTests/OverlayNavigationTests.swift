@@ -1,0 +1,88 @@
+#if os(macOS)
+import AppKit
+import Carbon
+import Testing
+import WindowNestCore
+@testable import WindowNest
+
+@Suite @MainActor
+struct OverlayNavigationTests {
+    private func key(_ characters: String, code: Int, modifiers: NSEvent.ModifierFlags = [],
+                     at timestamp: TimeInterval = 0) throws -> NSEvent {
+        try #require(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: modifiers, timestamp: timestamp, windowNumber: 0, context: nil,
+            characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: UInt16(code)))
+    }
+
+    @Test func searchTypingTakesPriorityAndDiscardsPendingNavigation() throws {
+        let editor = NSTextView()
+        var bindings = NavigationBindings.vim
+        bindings.assignments[.left, default: []].append(KeySequence([KeyStroke(key: "h", modifiers: .control)]))
+        let events = [
+            try key("h", code: kVK_ANSI_H),
+            try key("G", code: kVK_ANSI_G, modifiers: .shift),
+            try key("g", code: kVK_ANSI_G),
+            try key("0", code: kVK_ANSI_0),
+            try key("1", code: kVK_ANSI_1),
+            try key("h", code: kVK_ANSI_H, modifiers: .control),
+        ]
+        for event in events {
+            var matcher = NavigationKeyMatcher(bindings: bindings)
+            #expect(matcher.process(KeyStroke(key: "g"), at: 0) == .consumed)
+            #expect(OverlayPanelController.match(for: event, screen: .applications,
+                firstResponder: editor, matcher: &matcher) == .unhandled)
+            #expect(matcher.process(KeyStroke(key: "g"), at: 0.1) == .consumed)
+        }
+    }
+
+    @Test func builtInNavigationStillWorksWhileSearching() throws {
+        let editor = NSTextView()
+        var matcher = NavigationKeyMatcher(bindings: .vim)
+        let cases: [(NSEvent, NavigationCommand)] = [
+            (try key("\u{f701}", code: kVK_DownArrow), .moveDown),
+            (try key("\r", code: kVK_Return), .confirm),
+            (try key("\u{1b}", code: kVK_Escape), .escape),
+        ]
+        for (event, command) in cases {
+            #expect(OverlayPanelController.match(for: event, screen: .applications,
+                firstResponder: editor, matcher: &matcher) == .command(command))
+        }
+    }
+
+    @Test func markedTextKeepsConfirmationAndDiscardsPendingNavigation() throws {
+        let editor = NSTextView()
+        editor.setMarkedText("a", selectedRange: NSRange(location: 1, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(editor.hasMarkedText())
+        var matcher = NavigationKeyMatcher(bindings: .vim)
+        #expect(matcher.process(KeyStroke(key: "g"), at: 0) == .consumed)
+        let event = try key("\r", code: kVK_Return)
+        #expect(OverlayPanelController.match(for: event, screen: .applications,
+            firstResponder: editor, matcher: &matcher) == .unhandled)
+        #expect(matcher.process(KeyStroke(key: "g"), at: 0.1) == .consumed)
+    }
+
+    @Test(arguments: [BrowserScreen.applications, .windows(applicationID: 1)])
+    func customNavigationWorksOutsideTheSearchField(screen: BrowserScreen) throws {
+        var matcher = NavigationKeyMatcher(bindings: .vim)
+        let left = try key("h", code: kVK_ANSI_H)
+        #expect(OverlayPanelController.match(for: left, screen: screen,
+            firstResponder: nil, matcher: &matcher) == .command(.moveLeft))
+        let first = try key("g", code: kVK_ANSI_G, at: 1)
+        let second = try key("g", code: kVK_ANSI_G, at: 1.1)
+        #expect(OverlayPanelController.match(for: first, screen: screen,
+            firstResponder: nil, matcher: &matcher) == .consumed)
+        #expect(OverlayPanelController.match(for: second, screen: screen,
+            firstResponder: nil, matcher: &matcher) == .command(.moveToListStart))
+    }
+
+    @Test func numbersSelectWindowsButRemainSearchInputInApplications() throws {
+        var matcher = NavigationKeyMatcher(bindings: .vim)
+        let event = try key("1", code: kVK_ANSI_1)
+        #expect(OverlayPanelController.match(for: event, screen: .applications,
+            firstResponder: nil, matcher: &matcher) == .unhandled)
+        #expect(OverlayPanelController.match(for: event, screen: .windows(applicationID: 1),
+            firstResponder: nil, matcher: &matcher) == .command(.chooseNumber(1)))
+    }
+}
+#endif

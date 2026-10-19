@@ -23,6 +23,27 @@ private func apps(_ count: Int) -> [ApplicationItem] {
     var single = BrowserState(applications: apps(1)); _ = single.handle(.moveToRowEnd); #expect(single.selectedIndex == 0)
 }
 
+@Test func navigationDestinationsStayWithinFilteredApplications() {
+    let applications = ["Other", "Match A", "Match B", "Match C", "Match D", "Hidden"].enumerated().map {
+        ApplicationItem(id: Int32($0.offset), name: $0.element, windows: [])
+    }
+    var state = BrowserState(applications: applications, columnCount: 3)
+    state.updateSearchQuery("match")
+    state.handle(.moveToRowEnd)
+    #expect(state.selectedApplication?.name == "Match C")
+    state.handle(.moveToListEnd)
+    #expect(state.selectedApplication?.name == "Match D")
+    state.handle(.moveToRowEnd)
+    #expect(state.selectedIndex == 3)
+
+    state.updateSearchQuery("missing")
+    state.handle(.moveToListEnd)
+    state.handle(.moveToRowEnd)
+    #expect(state.selectedIndex == 0)
+    #expect(state.selectedApplication == nil)
+    #expect(state.handle(.confirm) == .none)
+}
+
 @Test func vimMatcherDistinguishesShiftAndModifiers() {
     var matcher = NavigationKeyMatcher(bindings: .vim)
     #expect(matcher.match(KeyStroke(key: "g"), at: 0) == nil)

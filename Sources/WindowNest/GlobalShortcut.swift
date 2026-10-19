@@ -7,6 +7,7 @@ import WindowNestCore
 
 extension Notification.Name { static let shortcutDidChange = Notification.Name("shortcutDidChange") }
 extension Notification.Name { static let navigationBindingsDidChange = Notification.Name("navigationBindingsDidChange") }
+extension Notification.Name { static let applicationSearchModeDidChange = Notification.Name("applicationSearchModeDidChange") }
 
 struct GlobalShortcutConfiguration: Equatable {
     var keyCode: UInt32
@@ -20,11 +21,18 @@ final class ShortcutSettings: ObservableObject {
     var modifiers: UInt32 { globalShortcut.modifiers }
     private let defaults: UserDefaults
     private let navigationStore: NavigationBindingsStore
+    private let searchModeStore: ApplicationSearchModeStore
     private let keyForVirtualKeyCode: @MainActor (UInt16) -> String?
     private var layoutObserver: AnyCancellable?
     @Published private(set) var navigationBindings: NavigationBindings
     @Published private(set) var activeNavigationBindings: NavigationBindings = .standard
     @Published var bindingError: String?
+    @Published var applicationSearchMode: ApplicationSearchMode {
+        didSet {
+            searchModeStore.value = applicationSearchMode
+            NotificationCenter.default.post(name: .applicationSearchModeDidChange, object: nil)
+        }
+    }
 
     init(defaults: UserDefaults = .standard,
          keyForVirtualKeyCode: @escaping @MainActor (UInt16) -> String? = KeyboardLayout.character) {
@@ -32,6 +40,8 @@ final class ShortcutSettings: ObservableObject {
         self.keyForVirtualKeyCode = keyForVirtualKeyCode
         navigationStore = NavigationBindingsStore(defaults: defaults)
         navigationBindings = navigationStore.load()
+        searchModeStore = ApplicationSearchModeStore(defaults: defaults)
+        applicationSearchMode = searchModeStore.value
         globalShortcut = GlobalShortcutConfiguration(
             keyCode: UInt32(defaults.object(forKey: "shortcutKeyCode") as? Int ?? kVK_ANSI_W),
             modifiers: UInt32(defaults.object(forKey: "shortcutModifiers") as? Int ?? (cmdKey | optionKey)))
@@ -184,6 +194,16 @@ struct SettingsView: View {
                 NavigationBindingRow(settings: settings, action: action)
             }
             if let error = settings.bindingError { Text(error).foregroundStyle(.red).font(.caption) }
+            Section("Application search") {
+                Picker("Matching", selection: $settings.applicationSearchMode) {
+                    Text("Fuzzy").tag(ApplicationSearchMode.fuzzy)
+                    Text("Prefix").tag(ApplicationSearchMode.prefix)
+                }
+                .pickerStyle(.radioGroup)
+                Text("Fuzzy finds characters in order, so ‘pass’ finds 1Password. Prefix only matches the beginning, so ‘pass’ does not; ‘1pa’ does.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }.padding(24).frame(width: 520)
     }
 }

@@ -2,21 +2,39 @@ import Foundation
 
 public struct BrowserState: Equatable, Sendable {
     public private(set) var applications: [ApplicationItem]
+    public private(set) var searchQuery = ""
+    public private(set) var searchMode: ApplicationSearchMode
     public private(set) var screen: BrowserScreen = .applications
     public private(set) var selectedIndex = 0
     public var columnCount: Int
 
-    public init(applications: [ApplicationItem] = [], columnCount: Int = 3) {
+    public init(applications: [ApplicationItem] = [], columnCount: Int = 3, searchMode: ApplicationSearchMode = .fuzzy) {
         self.applications = applications
+        self.searchMode = searchMode
         self.columnCount = max(columnCount, 1)
         clampSelection()
     }
 
     public var selectedApplication: ApplicationItem? {
         switch screen {
-        case .applications: return applications[safe: selectedIndex]
+        case .applications: return visibleApplications[safe: selectedIndex]
         case .windows(let id): return applications.first { $0.id == id }
         }
+    }
+
+
+    public var visibleApplications: [ApplicationItem] {
+        ApplicationSearch.results(in: applications, query: searchQuery, mode: searchMode)
+    }
+
+    public mutating func updateSearchQuery(_ query: String) {
+        searchQuery = query
+        if case .applications = screen { selectedIndex = 0 }
+    }
+
+    public mutating func updateSearchMode(_ mode: ApplicationSearchMode) {
+        searchMode = mode
+        if case .applications = screen { selectedIndex = 0 }
     }
 
     public var visibleWindows: [WindowItem] {
@@ -32,13 +50,13 @@ public struct BrowserState: Equatable, Sendable {
         if case .windows(let id) = screen {
             guard let app = applications.first(where: { $0.id == id }), !app.windows.isEmpty else {
                 screen = .applications
-                selectedIndex = applications.firstIndex { $0.id == selectedApplicationID } ?? 0
+                selectedIndex = visibleApplications.firstIndex { $0.id == selectedApplicationID } ?? 0
                 clampSelection()
                 return
             }
             selectedIndex = app.windows.firstIndex { $0.id == selectedWindowID } ?? min(selectedIndex, app.windows.count - 1)
         } else {
-            selectedIndex = applications.firstIndex { $0.id == selectedApplicationID } ?? min(selectedIndex, max(0, applications.count - 1))
+            selectedIndex = visibleApplications.firstIndex { $0.id == selectedApplicationID } ?? 0
         }
     }
 
@@ -58,9 +76,16 @@ public struct BrowserState: Equatable, Sendable {
         case .moveToListEnd: move(to: count - 1, count: count)
         case .confirm:
             if case .applications = screen {
-                guard let application = applications[safe: selectedIndex] else { return .none }
-                screen = .windows(applicationID: application.id)
-                selectedIndex = 0
+                guard let application = visibleApplications[safe: selectedIndex] else { return .none }
+                switch application.windows.count {
+                case 0:
+                    return .none
+                case 1:
+                    return .activate(application.windows[0].id)
+                default:
+                    screen = .windows(applicationID: application.id)
+                    selectedIndex = 0
+                }
             } else if let window = visibleWindows[safe: selectedIndex] {
                 return .activate(window.id)
             }
@@ -71,7 +96,7 @@ public struct BrowserState: Equatable, Sendable {
         case .escape:
             if case .windows(let id) = screen {
                 screen = .applications
-                selectedIndex = applications.firstIndex { $0.id == id } ?? 0
+                selectedIndex = visibleApplications.firstIndex { $0.id == id } ?? 0
             } else {
                 return .dismiss
             }
@@ -80,7 +105,7 @@ public struct BrowserState: Equatable, Sendable {
     }
 
     private var itemCount: Int {
-        if case .applications = screen { return applications.count }
+        if case .applications = screen { return visibleApplications.count }
         return visibleWindows.count
     }
 
@@ -96,6 +121,40 @@ public struct BrowserState: Equatable, Sendable {
 
     private mutating func clampSelection() {
         selectedIndex = min(max(selectedIndex, 0), max(0, itemCount - 1))
+    }
+}
+
+public enum ApplicationSearch {
+    public static func results(in applications: [ApplicationItem], query: String, mode: ApplicationSearchMode) -> [ApplicationItem] {
+        let needle = normalized(query.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard !needle.isEmpty else { return applications }
+
+        switch mode {
+        case .prefix:
+            return applications.filter { normalized($0.name).hasPrefix(needle) }
+        case .fuzzy:
+            return applications.enumerated().compactMap { index, application -> (Int, Int, ApplicationItem)? in
+                guard let rank = fuzzyRank(name: normalized(application.name), query: needle) else { return nil }
+                return (rank, index, application)
+            }
+            .sorted { ($0.0, $0.1) < ($1.0, $1.1) }
+            .map(\.2)
+        }
+    }
+
+    private static func normalized(_ value: String) -> String {
+        value.folding(options: [.caseInsensitive], locale: .current)
+    }
+
+    private static func fuzzyRank(name: String, query: String) -> Int? {
+        if name == query { return 0 }
+        if name.hasPrefix(query) { return 1 }
+        if name.range(of: query) != nil { return 2 }
+        var remainder = query[...]
+        for character in name where !remainder.isEmpty {
+            if character == remainder.first { remainder.removeFirst() }
+        }
+        return remainder.isEmpty ? 3 : nil
     }
 }
 

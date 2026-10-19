@@ -34,6 +34,26 @@ public struct ApplicationItem: Identifiable, Hashable, Sendable {
     }
 }
 
+public enum ApplicationSearchMode: String, CaseIterable, Codable, Sendable {
+    case fuzzy
+    case prefix
+}
+
+public struct ApplicationSearchModeStore {
+    private let defaults: UserDefaults
+    private let key: String
+
+    public init(defaults: UserDefaults = .standard, key: String = "applicationSearchMode") {
+        self.defaults = defaults
+        self.key = key
+    }
+
+    public var value: ApplicationSearchMode {
+        get { defaults.string(forKey: key).flatMap(ApplicationSearchMode.init(rawValue:)) ?? .fuzzy }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: key) }
+    }
+}
+
 public enum PermissionState: Equatable, Sendable {
     case ready
     case accessibilityRequired

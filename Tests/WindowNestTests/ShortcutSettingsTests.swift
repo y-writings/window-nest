@@ -92,5 +92,22 @@ struct ShortcutSettingsTests {
     @Test func activeKeyboardLayoutCanTranslateTheGlobalLetterKey() {
         #expect(KeyboardLayout.character(for: UInt16(kVK_ANSI_W))?.isEmpty == false)
     }
+
+    @Test func searchModePersistsAlongsideGlobalAndNavigationSettings() throws {
+        let (suite, defaults) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = ShortcutSettings(defaults: defaults, keyForVirtualKeyCode: { _ in "w" })
+        #expect(settings.applicationSearchMode == .fuzzy)
+        #expect(settings.applyNavigationBindings(.vim))
+        #expect(settings.updateGlobal(keyCode: UInt32(kVK_Tab)))
+        settings.applicationSearchMode = .prefix
+        #expect(defaults.string(forKey: "applicationSearchMode") == ApplicationSearchMode.prefix.rawValue)
+
+        let restored = ShortcutSettings(defaults: defaults, keyForVirtualKeyCode: { _ in "w" })
+        #expect(restored.applicationSearchMode == .prefix)
+        #expect(restored.keyCode == UInt32(kVK_Tab))
+        #expect(restored.navigationBindings == .vim)
+        #expect(restored.activeNavigationBindings == .vim)
+    }
 }
 #endif
