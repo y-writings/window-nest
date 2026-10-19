@@ -132,10 +132,10 @@ final class OverlayPanelController {
 
 struct OverlayView: View {
     @ObservedObject var model: OverlayModel
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 16), count: 3)
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 12) {
             dragHandle
             header
             if model.permission != .ready { permissionView }
@@ -146,7 +146,7 @@ struct OverlayView: View {
             else { cards }
             footer
         }
-        .padding(26)
+        .padding(20)
         .frame(minWidth: 760, minHeight: 480)
         .background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 20))
     }
@@ -162,7 +162,7 @@ struct OverlayView: View {
             .foregroundStyle(.secondary)
             .allowsHitTesting(false)
         }
-        .frame(maxWidth: .infinity, minHeight: 20)
+        .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Drag to move WindowNest")
     }
@@ -181,7 +181,7 @@ struct OverlayView: View {
     private var cards: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVGrid(columns: columns, spacing: 16) {
+                LazyVGrid(columns: columns, spacing: 12) {
                     if case .applications = model.state.screen {
                         ForEach(Array(model.state.applications.enumerated()), id: \.element.id) { index, app in
                             AppCard(app: app, icon: model.icons[app.id], selected: index == model.state.selectedIndex)
@@ -196,14 +196,25 @@ struct OverlayView: View {
                 }.padding(4)
             }
             .id(model.state.screen)
-            .onAppear { proxy.scrollTo(model.state.selectedIndex) }
-            .onChange(of: model.state.selectedIndex) { _, index in proxy.scrollTo(index) }
+            .onAppear { proxy.scrollTo(model.state.selectedIndex, anchor: .center) }
+            .onChange(of: model.state.selectedIndex) { _, index in
+                withAnimation(.easeOut(duration: 0.12)) {
+                    proxy.scrollTo(index, anchor: .center)
+                }
+            }
         }
     }
 
     private var footer: some View {
-        HStack { Text("← ↑ ↓ → Select   ⏎ Confirm   esc Back"); Spacer(); Text("1–9 Quick select") }
+        HStack {
+            Text("← ↑ ↓ → Select   ⏎ Confirm   esc Back")
+            if case .windows = model.state.screen {
+                Spacer()
+                Text("1–9 Quick select")
+            }
+        }
             .font(.caption).foregroundStyle(.secondary)
+            .lineLimit(1)
     }
 
     private var permissionView: some View {
