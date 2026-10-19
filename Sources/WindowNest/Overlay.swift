@@ -120,12 +120,20 @@ final class OverlayPanelController {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, event.window === self.panel else { return event }
             let priorScreen = self.model.state.screen
-            let builtIn = Self.command(for: event)
-            if builtIn != nil { self.matcher.reset() }
-            let command = builtIn ?? event.navigationStroke.flatMap { self.matcher.match($0, at: event.timestamp, isRepeat: event.isARepeat) }
-            guard let command else { return event }
-            self.model.send(command)
-            if priorScreen != self.model.state.screen { self.matcher.reset() }
+            let result: NavigationKeyMatcher.MatchResult
+            if let builtIn = Self.command(for: event) {
+                self.matcher.reset()
+                result = .command(builtIn)
+            } else if let stroke = event.navigationStroke {
+                result = self.matcher.process(stroke, at: event.timestamp, isRepeat: event.isARepeat)
+            } else { return event }
+            switch result {
+            case .unhandled: return event
+            case .consumed: break
+            case .command(let command):
+                self.model.send(command)
+                if priorScreen != self.model.state.screen { self.matcher.reset() }
+            }
             return nil
         }
         Task { await model.reload() }

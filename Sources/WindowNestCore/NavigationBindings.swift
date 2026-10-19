@@ -116,20 +116,49 @@ public enum NavigationBindingValidator {
 }
 
 public struct NavigationKeyMatcher: Sendable {
+    public enum MatchResult: Equatable, Sendable {
+        case unhandled
+        /// A sequence prefix or repeat accepted without executing a command.
+        case consumed
+        case command(NavigationCommand)
+    }
+
     public static let timeout: TimeInterval = 1
     private var bindings: NavigationBindings
     private var pending: (stroke: KeyStroke, time: TimeInterval)?
+    private var consumedSequenceStroke: KeyStroke?
     public init(bindings: NavigationBindings) { self.bindings = bindings }
     public mutating func update(_ bindings: NavigationBindings) { self.bindings = bindings; reset() }
-    public mutating func reset() { pending = nil }
+    public mutating func reset() { pending = nil; consumedSequenceStroke = nil }
+    /// Command-only convenience API. Event handlers should use `process` to prevent input fallthrough.
     public mutating func match(_ stroke: KeyStroke, at time: TimeInterval, isRepeat: Bool = false) -> NavigationCommand? {
+        if case .command(let command) = process(stroke, at: time, isRepeat: isRepeat) { return command }
+        return nil
+    }
+
+    /// Distinguishes accepted sequence input from keys the host should handle normally.
+    public mutating func process(_ stroke: KeyStroke, at time: TimeInterval, isRepeat: Bool = false) -> MatchResult {
+        if let pending, time - pending.time > Self.timeout { self.pending = nil }
+        // Holding either stroke must not trigger AppKit actions, complete a sequence,
+        // or extend its original deadline. One-stroke commands still repeat normally.
+        if isRepeat, stroke == consumedSequenceStroke { return .consumed }
+        consumedSequenceStroke = nil
         if let pending {
             self.pending = nil
-            if time - pending.time <= Self.timeout, !isRepeat, let action = action(for: [pending.stroke, stroke]) { return action.command }
+            if !isRepeat, let action = action(for: [pending.stroke, stroke]) {
+                consumedSequenceStroke = stroke
+                return .command(action.command)
+            }
         }
-        if let action = action(for: [stroke]) { return action.command }
-        if !isRepeat, hasPrefix(stroke) { pending = (stroke, time) }
-        return nil
+        if let action = action(for: [stroke]) { return .command(action.command) }
+        if hasPrefix(stroke) {
+            if !isRepeat {
+                pending = (stroke, time)
+                consumedSequenceStroke = stroke
+            }
+            return .consumed
+        }
+        return .unhandled
     }
     private func action(for strokes: [KeyStroke]) -> NavigationAction? {
         NavigationAction.allCases.first { bindings.assignments[$0]?.contains(KeySequence(strokes)) == true }

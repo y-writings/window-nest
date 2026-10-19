@@ -15,12 +15,17 @@ final class ShortcutSettings: ObservableObject {
     @Published var modifiers: UInt32 {
         didSet { defaults.set(Int(modifiers), forKey: "shortcutModifiers"); notify() }
     }
-    private let defaults = UserDefaults.standard
-    private let navigationStore = NavigationBindingsStore()
+    private let defaults: UserDefaults
+    private let navigationStore: NavigationBindingsStore
+    private let keyForVirtualKeyCode: @MainActor (UInt16) -> String?
     @Published private(set) var navigationBindings: NavigationBindings
     @Published var bindingError: String?
 
-    init() {
+    init(defaults: UserDefaults = .standard,
+         keyForVirtualKeyCode: @escaping @MainActor (UInt16) -> String? = KeyboardLayout.character) {
+        self.defaults = defaults
+        self.keyForVirtualKeyCode = keyForVirtualKeyCode
+        navigationStore = NavigationBindingsStore(defaults: defaults)
         navigationBindings = navigationStore.load()
         keyCode = UInt32(defaults.object(forKey: "shortcutKeyCode") as? Int ?? kVK_ANSI_W)
         modifiers = UInt32(defaults.object(forKey: "shortcutModifiers") as? Int ?? (cmdKey | optionKey))
@@ -33,7 +38,9 @@ final class ShortcutSettings: ObservableObject {
     private func globalKeyStroke(keyCode: UInt32, modifiers: UInt32) -> KeyStroke? {
         let key: String
         switch Int(keyCode) {
-        case kVK_ANSI_W: key = "w"
+        case kVK_ANSI_W:
+            guard let character = keyForVirtualKeyCode(UInt16(keyCode)), !character.isEmpty else { return nil }
+            key = character
         case kVK_Space: key = " "
         case kVK_Tab: key = "tab"
         default: return nil
@@ -47,8 +54,10 @@ final class ShortcutSettings: ObservableObject {
 
     func updateGlobal(keyCode newKeyCode: UInt32? = nil, modifiers newModifiers: UInt32? = nil) {
         let candidateKey = newKeyCode ?? keyCode, candidateModifiers = newModifiers ?? modifiers
-        if let stroke = globalKeyStroke(keyCode: candidateKey, modifiers: candidateModifiers),
-           let conflict = NavigationBindingValidator.validate(navigationBindings, globalShortcut: stroke) {
+        guard let stroke = globalKeyStroke(keyCode: candidateKey, modifiers: candidateModifiers) else {
+            bindingError = "The current keyboard layout cannot translate this shortcut."; return
+        }
+        if let conflict = NavigationBindingValidator.validate(navigationBindings, globalShortcut: stroke) {
             bindingError = conflict.description; return
         }
         keyCode = candidateKey; modifiers = candidateModifiers; bindingError = nil
@@ -56,6 +65,9 @@ final class ShortcutSettings: ObservableObject {
 
     @discardableResult
     func applyNavigationBindings(_ value: NavigationBindings) -> Bool {
+        guard let globalKeyStroke else {
+            bindingError = "The current keyboard layout cannot translate this shortcut."; return false
+        }
         if let conflict = NavigationBindingValidator.validate(value, globalShortcut: globalKeyStroke) {
             bindingError = conflict.description; return false
         }
@@ -68,6 +80,28 @@ final class ShortcutSettings: ObservableObject {
     }
 
     private func notify() { NotificationCenter.default.post(name: .shortcutDidChange, object: nil) }
+}
+
+@MainActor
+enum KeyboardLayout {
+    static func character(for keyCode: UInt16) -> String? {
+        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let property = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
+        let data = Unmanaged<CFData>.fromOpaque(property).takeUnretainedValue()
+        guard let bytes = CFDataGetBytePtr(data) else { return nil }
+        let layout = UnsafeRawPointer(bytes).assumingMemoryBound(to: UCKeyboardLayout.self)
+        var deadKeyState: UInt32 = 0
+        var length = 0
+        var characters = [UniChar](repeating: 0, count: 16)
+        // Match NSEvent.charactersIgnoringModifiers: the global choices have no Shift modifier.
+        let status = withExtendedLifetime(data) {
+            UCKeyTranslate(layout, keyCode, UInt16(kUCKeyActionDown), 0,
+                           UInt32(LMGetKbdType()), OptionBits(kUCKeyTranslateNoDeadKeysMask),
+                           &deadKeyState, characters.count, &length, &characters)
+        }
+        guard status == noErr, length > 0 else { return nil }
+        return String(utf16CodeUnits: characters, count: length)
+    }
 }
 
 final class GlobalShortcut {
@@ -155,6 +189,7 @@ private struct NavigationBindingRow: View {
                 settings.applyNavigationBindings(value)
             }
         }
+        .onReceive(settings.$navigationBindings) { _ in recording.reset() }
     }
 }
 
