@@ -68,6 +68,12 @@ public struct BrowserState: Equatable, Sendable {
         case .moveRight: move(by: 1, count: count)
         case .moveUp: move(by: -columnCount, count: count)
         case .moveDown: move(by: columnCount, count: count)
+        case .moveToRowStart:
+            move(to: (selectedIndex / columnCount) * columnCount, count: count)
+        case .moveToRowEnd:
+            move(to: min(((selectedIndex / columnCount) + 1) * columnCount - 1, count - 1), count: count)
+        case .moveToListStart: move(to: 0, count: count)
+        case .moveToListEnd: move(to: count - 1, count: count)
         case .confirm:
             if case .applications = screen {
                 guard let application = visibleApplications[safe: selectedIndex] else { return .none }
@@ -106,6 +112,11 @@ public struct BrowserState: Equatable, Sendable {
     private mutating func move(by delta: Int, count: Int) {
         guard count > 0 else { selectedIndex = 0; return }
         selectedIndex = min(max(selectedIndex + delta, 0), count - 1)
+    }
+
+    private mutating func move(to index: Int, count: Int) {
+        guard count > 0 else { selectedIndex = 0; return }
+        selectedIndex = min(max(index, 0), count - 1)
     }
 
     private mutating func clampSelection() {

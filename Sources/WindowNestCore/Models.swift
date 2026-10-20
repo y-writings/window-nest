@@ -68,6 +68,7 @@ public enum BrowserScreen: Hashable, Sendable {
 
 public enum NavigationCommand: Equatable, Sendable {
     case moveLeft, moveRight, moveUp, moveDown, confirm, escape
+    case moveToRowStart, moveToRowEnd, moveToListStart, moveToListEnd
     case chooseNumber(Int)
 }
 

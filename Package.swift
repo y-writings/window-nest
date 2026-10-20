@@ -12,5 +12,6 @@ let package = Package(
         .target(name: "WindowNestCore"),
         .executableTarget(name: "WindowNest", dependencies: ["WindowNestCore"]),
         .testTarget(name: "WindowNestCoreTests", dependencies: ["WindowNestCore"]),
+        .testTarget(name: "WindowNestTests", dependencies: ["WindowNest", "WindowNestCore"]),
     ]
 )
