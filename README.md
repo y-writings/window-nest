@@ -74,7 +74,7 @@ Docker 内で検証できるのは Linux 対応部分です。macOS 固有の UI
 
 ### 許可済みでも「Permissions Required」が表示される場合
 
-既定の `make app` / `mise run app` はアドホック署名を使います。
+`CODE_SIGN_IDENTITY` を設定していない場合、`make app` / `mise run app` はアドホック署名を使います。
 コードの変更後に再ビルドすると署名の識別情報が変わり、システム設定のスイッチが ON でも、以前のビルドへの許可が現在のアプリに適用されない場合があります。
 この状態は再起動だけでは解消しません。
 [Apple による説明](https://developer.apple.com/forums/thread/819406)も参照してください。
@@ -103,23 +103,38 @@ Docker 内で検証できるのは Linux 対応部分です。macOS 固有の UI
 
 ### 再ビルド後も権限を維持する署名
 
-コード署名証明書がある場合は、同じ証明書を使ってビルドしてください。利用可能な証明書は次のコマンドで確認できます。
+Apple Development 証明書（Personal Team の証明書を含む）を用意し、毎回同じ証明書を使ってビルドしてください。利用可能な証明書は次のコマンドで確認できます。
 
 ```bash
 security find-identity -v -p codesigning
 ```
 
-表示された証明書名または SHA-1 を `CODE_SIGN_IDENTITY` に指定します。
+表示された証明書名または SHA-1 を、Git の管理対象外である mise のローカル設定に保存します。
 
 ```bash
-CODE_SIGN_IDENTITY="<証明書名または SHA-1>" mise run app
-# mise を使わない場合
+mise set --file .mise/config.local.toml CODE_SIGN_IDENTITY="<証明書名または SHA-1>"
+mise run app
+```
+
+`.mise/config.local.toml` は自動的に読み込まれ、環境変数の `CODE_SIGN_IDENTITY` が
+Makefile のアドホック署名という既定値を上書きします。
+証明書名は開発者ごとに異なるため、このファイルは `.gitignore` に登録されています。
+mise を使わない場合はビルドごとに指定できます。
+
+```bash
 make app CODE_SIGN_IDENTITY="<証明書名または SHA-1>"
 ```
 
-初めて署名方法を切り替えるときは、上記の手順で権限を登録し直してください。
+初めて署名方法を切り替えるときだけ、上記の `tccutil reset` の手順で
+アクセシビリティと画面収録の両方をリセットし、現在の `.build/WindowNest.app` を許可し直してください。
+以後、同じ証明書で署名していれば、通常の再ビルドで許可を登録し直す必要はありません。
 証明書がない場合も既定のアドホック署名でビルドできますが、コード変更後に再登録が必要になることがあります。
 ビルド時にもこの注意を表示します。
+
+Personal Team の証明書や更新後の証明書で許可が常に引き継がれるかは、
+Apple の公開資料では明文化されていません。
+また、macOS 15 以降で画面収録について定期的に表示される再確認は別の仕組みであり、
+この署名設定では抑止できません。
 
 ## 基本操作
 

@@ -11,7 +11,7 @@ description = "Run Swift tests with the host toolchain"
 run = "make test"
 
 [tasks.app]
-description = "Build and sign WindowNest.app using CODE_SIGN_IDENTITY (defaults to ad-hoc, macOS only)"
+description = "Build and sign WindowNest.app using CODE_SIGN_IDENTITY (configure it in .mise/config.local.toml)"
 run = "make app"
 
 [tasks.clean]
