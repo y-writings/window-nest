@@ -19,7 +19,7 @@ endif
 	mkdir -p .build/WindowNest.app/Contents/MacOS .build/WindowNest.app/Contents/Resources
 	cp .build/release/WindowNest .build/WindowNest.app/Contents/MacOS/WindowNest
 	cp Resources/Info.plist .build/WindowNest.app/Contents/Info.plist
-	codesign --force --deep --sign "$(CODE_SIGN_IDENTITY)" .build/WindowNest.app
+	codesign --force --sign "$(CODE_SIGN_IDENTITY)" .build/WindowNest.app
 
 clean:
 	swift package clean

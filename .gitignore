@@ -7,3 +7,6 @@
 # Swift Package Manager build products
 .build/
 .swiftpm/
+
+# Developer-specific signing identity (created as described in README.md)
+.mise/config.local.toml
