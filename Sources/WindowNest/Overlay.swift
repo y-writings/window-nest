@@ -176,16 +176,17 @@ final class OverlayPanelController {
     static func match(for event: NSEvent, screen: BrowserScreen, firstResponder: NSResponder?,
                       matcher: inout NavigationKeyMatcher) -> NavigationKeyMatcher.MatchResult {
         let searchEditor = screen == .applications ? firstResponder as? NSTextView : nil
-        if searchEditor?.hasMarkedText() == true {
-            matcher.reset()
-            return .unhandled
-        }
-        if event.isARepeat, event.modifierFlags.intersection([.shift, .control, .option, .command]) == .command,
-           [12, 13, 36, 76].contains(Int(event.keyCode)) {
+        let builtIn = command(for: event)
+        if event.isARepeat, builtIn == .terminateApplication || builtIn == .closeWindow || builtIn == .showWindows {
             matcher.reset()
             return .consumed
         }
-        if let builtIn = command(for: event) {
+        if searchEditor?.hasMarkedText() == true {
+            matcher.reset()
+            if builtIn == .terminateApplication || builtIn == .closeWindow { return .consumed }
+            return .unhandled
+        }
+        if let builtIn {
             matcher.reset()
             if screen == .applications, case .chooseNumber = builtIn { return .unhandled }
             return .command(builtIn)
@@ -202,13 +203,10 @@ final class OverlayPanelController {
     private static func command(for event: NSEvent) -> NavigationCommand? {
         let explicitModifiers: NSEvent.ModifierFlags = [.shift, .control, .option, .command]
         let modifiers = event.modifierFlags.intersection(explicitModifiers)
-        if modifiers == .command, !event.isARepeat {
-            switch event.keyCode {
-            case 12: return .terminateApplication // Q
-            case 13: return .closeWindow // W
-            case 36, 76: return .showWindows
-            default: break
-            }
+        if modifiers == .command {
+            if event.navigationStroke == KeyStroke(key: "q", modifiers: .command) { return .terminateApplication }
+            if event.navigationStroke == KeyStroke(key: "w", modifiers: .command) { return .closeWindow }
+            if event.keyCode == 36 || event.keyCode == 76 { return .showWindows }
         }
         guard modifiers.isEmpty else { return nil }
         switch event.keyCode {

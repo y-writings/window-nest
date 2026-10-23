@@ -8,10 +8,10 @@ import WindowNestCore
 @Suite @MainActor
 struct OverlayNavigationTests {
     private func key(_ characters: String, code: Int, modifiers: NSEvent.ModifierFlags = [],
-                     at timestamp: TimeInterval = 0) throws -> NSEvent {
+                     at timestamp: TimeInterval = 0, repeat isRepeat: Bool = false) throws -> NSEvent {
         try #require(NSEvent.keyEvent(with: .keyDown, location: .zero,
             modifierFlags: modifiers, timestamp: timestamp, windowNumber: 0, context: nil,
-            characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: UInt16(code)))
+            characters: characters, charactersIgnoringModifiers: characters, isARepeat: isRepeat, keyCode: UInt16(code)))
     }
 
     @Test func searchTypingTakesPriorityAndDiscardsPendingNavigation() throws {
@@ -62,16 +62,53 @@ struct OverlayNavigationTests {
         #expect(matcher.process(KeyStroke(key: "g"), at: 0.1) == .consumed)
     }
 
-    @Test func destructiveShortcutsAreConsumedOnceButNeverDuringIMEComposition() throws {
+    @Test func destructiveShortcutsUseTranslatedCharactersAndSuppressRepeats() throws {
         var matcher = NavigationKeyMatcher(bindings: .standard)
-        let quit = try key("q", code: kVK_ANSI_Q, modifiers: .command)
+        let quit = try key("q", code: kVK_ANSI_A, modifiers: .command)
         #expect(OverlayPanelController.match(for: quit, screen: .applications,
             firstResponder: NSTextView(), matcher: &matcher) == .command(.terminateApplication))
-        let repeated = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero,
-            modifierFlags: .command, timestamp: 0, windowNumber: 0, context: nil,
-            characters: "q", charactersIgnoringModifiers: "q", isARepeat: true, keyCode: UInt16(kVK_ANSI_Q)))
+        let close = try key("w", code: kVK_ANSI_A, modifiers: .command)
+        #expect(OverlayPanelController.match(for: close, screen: .windows(applicationID: 1),
+            firstResponder: nil, matcher: &matcher) == .command(.closeWindow))
+        let physicalQ = try key("a", code: kVK_ANSI_Q, modifiers: .command)
+        #expect(OverlayPanelController.match(for: physicalQ, screen: .applications,
+            firstResponder: nil, matcher: &matcher) == .unhandled)
+        let physicalW = try key("z", code: kVK_ANSI_W, modifiers: .command)
+        #expect(OverlayPanelController.match(for: physicalW, screen: .windows(applicationID: 1),
+            firstResponder: nil, matcher: &matcher) == .unhandled)
+        let repeated = try key("q", code: kVK_ANSI_A, modifiers: .command, repeat: true)
         #expect(OverlayPanelController.match(for: repeated, screen: .applications,
             firstResponder: nil, matcher: &matcher) == .consumed)
+        #expect(OverlayPanelController.match(for: try key("w", code: kVK_ANSI_A, modifiers: .command, repeat: true),
+            screen: .windows(applicationID: 1), firstResponder: nil, matcher: &matcher) == .consumed)
+    }
+
+    @Test func markedTextConsumesDestructiveShortcutsButPassesIMEConfirmation() throws {
+        let editor = NSTextView()
+        editor.setMarkedText("a", selectedRange: NSRange(location: 1, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(editor.hasMarkedText())
+        var matcher = NavigationKeyMatcher(bindings: .standard)
+        for event in [try key("q", code: kVK_ANSI_A, modifiers: .command),
+                      try key("w", code: kVK_ANSI_A, modifiers: .command),
+                      try key("q", code: kVK_ANSI_A, modifiers: .command, repeat: true)] {
+            #expect(OverlayPanelController.match(for: event, screen: .applications,
+                firstResponder: editor, matcher: &matcher) == .consumed)
+        }
+        #expect(OverlayPanelController.match(for: try key("\r", code: kVK_Return, modifiers: .command),
+            screen: .applications, firstResponder: editor, matcher: &matcher) == .unhandled)
+    }
+
+    @Test func commandReturnOpensNestOnceForMainAndKeypadReturn() throws {
+        var matcher = NavigationKeyMatcher(bindings: .standard)
+        for code in [kVK_Return, kVK_ANSI_KeypadEnter] {
+            let event = try key("\r", code: code, modifiers: .command)
+            #expect(OverlayPanelController.match(for: event, screen: .applications,
+                firstResponder: nil, matcher: &matcher) == .command(.showWindows))
+            let repeated = try key("\r", code: code, modifiers: .command, repeat: true)
+            #expect(OverlayPanelController.match(for: repeated, screen: .applications,
+                firstResponder: nil, matcher: &matcher) == .consumed)
+        }
     }
 
     @Test(arguments: [BrowserScreen.applications, .windows(applicationID: 1)])
