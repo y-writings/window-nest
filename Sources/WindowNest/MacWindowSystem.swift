@@ -9,6 +9,7 @@ final class MacWindowSystem {
     struct Snapshot { let applications: [ApplicationItem]; let icons: [Int32: NSImage]; let permission: PermissionState }
     private struct WindowDescription { let id: WindowID; let attributes: WindowAttributes }
     private struct AccessibilityWindow { let element: AXUIElement; let attributes: WindowAttributes }
+    private var runningApplications: [Int32: NSRunningApplication] = [:]
 
     func snapshot(promptForAccessibility: Bool = false) async -> Snapshot {
         let axOptions = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: promptForAccessibility] as CFDictionary
@@ -18,10 +19,10 @@ final class MacWindowSystem {
         guard accessibility else { return Snapshot(applications: [], icons: [:], permission: permission) }
 
         let running = Dictionary(uniqueKeysWithValues: NSWorkspace.shared.runningApplications.map { ($0.processIdentifier, $0) })
-        let grouped = Dictionary(grouping: windowDescriptions(running: running), by: \.id.processIdentifier)
+        let grouped = Dictionary(grouping: Self.windowDescriptions(running: running), by: \.id.processIdentifier)
         let applications = grouped.compactMap { pid, windows -> ApplicationItem? in
             guard let app = running[pid], !windows.isEmpty else { return nil }
-            let axWindows = windows.contains { $0.attributes.title == nil } ? accessibilityWindows(for: pid) : []
+            let axWindows = windows.contains { $0.attributes.title == nil } ? Self.accessibilityWindows(for: pid) : []
             let attributes = windows.map(\.attributes)
             let axAttributes = axWindows.map(\.attributes)
             let items = windows.enumerated().map { index, window in
@@ -35,6 +36,11 @@ final class MacWindowSystem {
             return ApplicationItem(id: pid, name: app.localizedName ?? "Unknown App", bundleIdentifier: app.bundleIdentifier, windows: items)
         }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         let icons = Dictionary(uniqueKeysWithValues: applications.compactMap { item in running[item.id]?.icon.map { (item.id, $0) } })
+        // Preserve the exact object selected from this snapshot. Termination must not look an
+        // application up again by a PID which the OS could have reused in the meantime.
+        runningApplications = Dictionary(uniqueKeysWithValues: applications.compactMap { item in
+            running[item.id].map { (item.id, $0) }
+        })
         return Snapshot(applications: applications, icons: icons, permission: permission)
     }
 
@@ -55,21 +61,90 @@ final class MacWindowSystem {
     func activate(_ id: WindowID) async -> Bool {
         guard AXIsProcessTrusted(), let app = NSRunningApplication(processIdentifier: id.processIdentifier) else { return false }
         let running = [id.processIdentifier: app]
-        let windows = windowDescriptions(running: running)
+        let windows = Self.windowDescriptions(running: running)
         guard let target = windows.firstIndex(where: { $0.id == id }) else { return false }
-        let axWindows = accessibilityWindows(for: id.processIdentifier)
+        let axWindows = Self.accessibilityWindows(for: id.processIdentifier)
         let attributes = windows.map(\.attributes)
         let axAttributes = axWindows.map(\.attributes)
         guard let match = attributes[target].uniqueMatch(in: axAttributes),
               axAttributes[match].uniqueMatch(in: attributes) == target else { return false }
 
         // Recheck after AX calls: the selected CG window may have closed or moved meanwhile.
-        guard windowDescriptions(running: running).contains(where: { $0.id == id && $0.attributes == attributes[target] }),
+        guard Self.windowDescriptions(running: running).contains(where: { $0.id == id && $0.attributes == attributes[target] }),
               AXUIElementPerformAction(axWindows[match].element, kAXRaiseAction as CFString) == .success else { return false }
         return app.activate(options: [.activateIgnoringOtherApps])
     }
 
-    private func windowDescriptions(running: [Int32: NSRunningApplication]) -> [WindowDescription] {
+    func terminateApplication(_ pid: Int32) async -> Bool {
+        guard let application = runningApplications[pid],
+              application.processIdentifier == pid, !application.isTerminated else { return false }
+        return application.terminate()
+    }
+
+    enum CloseResult: Equatable, Sendable { case requested, unavailable, timedOut }
+
+    private final class CloseCompletion: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<CloseResult, Never>?
+        private var result: CloseResult?
+        func install(_ continuation: CheckedContinuation<CloseResult, Never>) {
+            lock.lock()
+            if let result { lock.unlock(); continuation.resume(returning: result) }
+            else { self.continuation = continuation; lock.unlock() }
+        }
+        func finish(_ result: CloseResult) {
+            lock.lock()
+            guard self.result == nil else { lock.unlock(); return }
+            self.result = result
+            let continuation = self.continuation
+            self.continuation = nil
+            lock.unlock()
+            continuation?.resume(returning: result)
+        }
+    }
+
+    func closeWindow(_ id: WindowID) async -> Bool {
+        let completion = CloseCompletion()
+        let result = await withCheckedContinuation { continuation in
+            completion.install(continuation)
+            DispatchQueue.global(qos: .userInitiated).async {
+                completion.finish(Self.closeWindowSynchronously(id))
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+                completion.finish(.timedOut)
+            }
+        }
+        return result == .requested
+    }
+
+    /// Runs outside the main actor because AX calls can wait for an unresponsive target. A timeout
+    /// releases the UI even though the system call itself cannot safely be cancelled.
+    nonisolated private static func closeWindowSynchronously(_ id: WindowID) -> CloseResult {
+        guard AXIsProcessTrusted(), let app = NSRunningApplication(processIdentifier: id.processIdentifier) else { return .unavailable }
+        let running = [id.processIdentifier: app]
+        let windows = windowDescriptions(running: running)
+        guard let target = windows.firstIndex(where: { $0.id == id }) else { return .unavailable }
+        let axWindows = accessibilityWindows(for: id.processIdentifier)
+        let attributes = windows.map(\.attributes)
+        let axAttributes = axWindows.map(\.attributes)
+        guard let match = attributes[target].uniqueMatch(in: axAttributes),
+              axAttributes[match].uniqueMatch(in: attributes) == target else { return .unavailable }
+
+        // Repeat the CG half of the identity check immediately before pressing Close.
+        guard windowDescriptions(running: running).contains(where: {
+            $0.id == id && $0.attributes == attributes[target]
+        }) else { return .unavailable }
+        var closeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(axWindows[match].element, kAXCloseButtonAttribute as CFString, &closeValue) == .success,
+              let closeButton = closeValue, CFGetTypeID(closeButton) == AXUIElementGetTypeID() else { return .unavailable }
+        let button = unsafeBitCast(closeButton, to: AXUIElement.self)
+        var enabledValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(button, kAXEnabledAttribute as CFString, &enabledValue) == .success,
+              (enabledValue as? Bool) == true else { return .unavailable }
+        return AXUIElementPerformAction(button, kAXPressAction as CFString) == .success ? .requested : .unavailable
+    }
+
+    private nonisolated static func windowDescriptions(running: [Int32: NSRunningApplication]) -> [WindowDescription] {
         let ownPID = ProcessInfo.processInfo.processIdentifier
         let descriptions = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[CFString: Any]]) ?? []
         return descriptions.compactMap { description in
@@ -83,7 +158,7 @@ final class MacWindowSystem {
         }
     }
 
-    private func accessibilityWindows(for pid: Int32) -> [AccessibilityWindow] {
+    private nonisolated static func accessibilityWindows(for pid: Int32) -> [AccessibilityWindow] {
         let appElement = AXUIElementCreateApplication(pid)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &value) == .success,
@@ -95,7 +170,7 @@ final class MacWindowSystem {
         }
     }
 
-    private func accessibilityFrame(of element: AXUIElement) -> CGRect? {
+    private nonisolated static func accessibilityFrame(of element: AXUIElement) -> CGRect? {
         var positionValue: CFTypeRef?
         var sizeValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionValue) == .success,

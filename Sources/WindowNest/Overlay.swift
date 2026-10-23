@@ -12,6 +12,7 @@ final class OverlayModel: ObservableObject {
     @Published var permission: PermissionState = .ready
     @Published var loading = false
     @Published var navigationBindings: NavigationBindings = .standard
+    @Published private(set) var operationInProgress = false
     var dismiss: () -> Void = {}
     var resetKeySequence: () -> Void = {}
     private let system: MacWindowSystem
@@ -43,6 +44,24 @@ final class OverlayModel: ObservableObject {
                 if await system.activate(id) { dismiss() }
                 else { await reload() }
             }
+        case .terminateApplication(let pid):
+            performDestructiveOperation { [system] in await system.terminateApplication(pid) }
+        case .closeWindow(let id):
+            performDestructiveOperation { [system] in await system.closeWindow(id) }
+        }
+    }
+
+    private func performDestructiveOperation(_ operation: @escaping @MainActor () async -> Bool) {
+        guard !operationInProgress else { return }
+        operationInProgress = true
+        // Give the target application room to show save/review sheets unobscured.
+        dismiss()
+        Task {
+            _ = await operation()
+            // A successful API return is only acceptance of the request. Always reacquire the
+            // real state; never optimistically remove the selected item.
+            await reload()
+            operationInProgress = false
         }
     }
 
@@ -157,11 +176,17 @@ final class OverlayPanelController {
     static func match(for event: NSEvent, screen: BrowserScreen, firstResponder: NSResponder?,
                       matcher: inout NavigationKeyMatcher) -> NavigationKeyMatcher.MatchResult {
         let searchEditor = screen == .applications ? firstResponder as? NSTextView : nil
+        let builtIn = command(for: event)
+        if event.isARepeat, builtIn == .terminateApplication || builtIn == .closeWindow || builtIn == .showWindows {
+            matcher.reset()
+            return .consumed
+        }
         if searchEditor?.hasMarkedText() == true {
             matcher.reset()
+            if builtIn == .terminateApplication || builtIn == .closeWindow { return .consumed }
             return .unhandled
         }
-        if let builtIn = command(for: event) {
+        if let builtIn {
             matcher.reset()
             if screen == .applications, case .chooseNumber = builtIn { return .unhandled }
             return .command(builtIn)
@@ -177,7 +202,13 @@ final class OverlayPanelController {
 
     private static func command(for event: NSEvent) -> NavigationCommand? {
         let explicitModifiers: NSEvent.ModifierFlags = [.shift, .control, .option, .command]
-        guard event.modifierFlags.intersection(explicitModifiers).isEmpty else { return nil }
+        let modifiers = event.modifierFlags.intersection(explicitModifiers)
+        if modifiers == .command {
+            if event.navigationStroke == KeyStroke(key: "q", modifiers: .command) { return .terminateApplication }
+            if event.navigationStroke == KeyStroke(key: "w", modifiers: .command) { return .closeWindow }
+            if event.keyCode == 36 || event.keyCode == 76 { return .showWindows }
+        }
+        guard modifiers.isEmpty else { return nil }
         switch event.keyCode {
         case 123: return .moveLeft
         case 124: return .moveRight
@@ -313,7 +344,10 @@ struct OverlayView: View {
             if !custom.isEmpty { Text(custom) }
             if case .windows = model.state.screen {
                 Spacer()
-                Text("1–9 Quick select")
+                Text("⌘W Close window   1–9 Quick select")
+            } else {
+                Spacer()
+                Text("⌘Q Quit app   ⌘⏎ Show windows")
             }
         }
             .font(.caption).foregroundStyle(.secondary)
