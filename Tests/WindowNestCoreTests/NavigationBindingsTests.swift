@@ -85,6 +85,17 @@ private func apps(_ count: Int) -> [ApplicationItem] {
     defaults.set(Data("broken".utf8), forKey: "navigationBindings"); #expect(store.load() == .standard)
 }
 
+@Test func loadingDropsOnlyBindingsThatBecameReserved() throws {
+    let suite = "WindowNestTests-\(UUID())"; let defaults = try #require(UserDefaults(suiteName: suite)); defer { defaults.removePersistentDomain(forName: suite) }
+    let bindings = NavigationBindings(assignments: [.left: [
+        KeySequence([KeyStroke(key: "h")]), KeySequence([KeyStroke(key: "q", modifiers: .command)]),
+    ]])
+    defaults.set(try JSONEncoder().encode(bindings), forKey: "navigationBindings")
+    #expect(NavigationBindingsStore(defaults: defaults).load() == NavigationBindings(assignments: [
+        .left: [KeySequence([KeyStroke(key: "h")])],
+    ]))
+}
+
 @Test func tabAliasesConflictWithEveryGlobalModifierCombination() {
     let combinations: [KeyModifiers] = [[.command, .option], [.control, .option], [.control, .command]]
     for modifiers in combinations {

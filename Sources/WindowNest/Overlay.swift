@@ -12,6 +12,7 @@ final class OverlayModel: ObservableObject {
     @Published var permission: PermissionState = .ready
     @Published var loading = false
     @Published var navigationBindings: NavigationBindings = .standard
+    @Published private(set) var operationInProgress = false
     var dismiss: () -> Void = {}
     var resetKeySequence: () -> Void = {}
     private let system: MacWindowSystem
@@ -43,6 +44,24 @@ final class OverlayModel: ObservableObject {
                 if await system.activate(id) { dismiss() }
                 else { await reload() }
             }
+        case .terminateApplication(let pid):
+            performDestructiveOperation { [system] in await system.terminateApplication(pid) }
+        case .closeWindow(let id):
+            performDestructiveOperation { [system] in await system.closeWindow(id) }
+        }
+    }
+
+    private func performDestructiveOperation(_ operation: @escaping @MainActor () async -> Bool) {
+        guard !operationInProgress else { return }
+        operationInProgress = true
+        // Give the target application room to show save/review sheets unobscured.
+        dismiss()
+        Task {
+            _ = await operation()
+            // A successful API return is only acceptance of the request. Always reacquire the
+            // real state; never optimistically remove the selected item.
+            await reload()
+            operationInProgress = false
         }
     }
 
@@ -161,6 +180,11 @@ final class OverlayPanelController {
             matcher.reset()
             return .unhandled
         }
+        if event.isARepeat, event.modifierFlags.intersection([.shift, .control, .option, .command]) == .command,
+           [12, 13, 36, 76].contains(Int(event.keyCode)) {
+            matcher.reset()
+            return .consumed
+        }
         if let builtIn = command(for: event) {
             matcher.reset()
             if screen == .applications, case .chooseNumber = builtIn { return .unhandled }
@@ -177,7 +201,16 @@ final class OverlayPanelController {
 
     private static func command(for event: NSEvent) -> NavigationCommand? {
         let explicitModifiers: NSEvent.ModifierFlags = [.shift, .control, .option, .command]
-        guard event.modifierFlags.intersection(explicitModifiers).isEmpty else { return nil }
+        let modifiers = event.modifierFlags.intersection(explicitModifiers)
+        if modifiers == .command, !event.isARepeat {
+            switch event.keyCode {
+            case 12: return .terminateApplication // Q
+            case 13: return .closeWindow // W
+            case 36, 76: return .showWindows
+            default: break
+            }
+        }
+        guard modifiers.isEmpty else { return nil }
         switch event.keyCode {
         case 123: return .moveLeft
         case 124: return .moveRight
@@ -313,7 +346,10 @@ struct OverlayView: View {
             if !custom.isEmpty { Text(custom) }
             if case .windows = model.state.screen {
                 Spacer()
-                Text("1–9 Quick select")
+                Text("⌘W Close window   1–9 Quick select")
+            } else {
+                Spacer()
+                Text("⌘Q Quit app   ⌘⏎ Show windows")
             }
         }
             .font(.caption).foregroundStyle(.secondary)

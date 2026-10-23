@@ -93,6 +93,20 @@ public struct BrowserState: Equatable, Sendable {
             guard case .windows = screen, (1...9).contains(number), let window = visibleWindows[safe: number - 1] else { return .none }
             selectedIndex = number - 1
             return .activate(window.id)
+        case .showWindows:
+            guard case .applications = screen,
+                  let application = visibleApplications[safe: selectedIndex],
+                  !application.windows.isEmpty else { return .none }
+            screen = .windows(applicationID: application.id)
+            selectedIndex = 0
+        case .terminateApplication:
+            guard case .applications = screen,
+                  let application = visibleApplications[safe: selectedIndex] else { return .none }
+            return .terminateApplication(application.id)
+        case .closeWindow:
+            guard case .windows = screen,
+                  let window = visibleWindows[safe: selectedIndex] else { return .none }
+            return .closeWindow(window.id)
         case .escape:
             if case .windows(let id) = screen {
                 screen = .applications

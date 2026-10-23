@@ -62,6 +62,18 @@ struct OverlayNavigationTests {
         #expect(matcher.process(KeyStroke(key: "g"), at: 0.1) == .consumed)
     }
 
+    @Test func destructiveShortcutsAreConsumedOnceButNeverDuringIMEComposition() throws {
+        var matcher = NavigationKeyMatcher(bindings: .standard)
+        let quit = try key("q", code: kVK_ANSI_Q, modifiers: .command)
+        #expect(OverlayPanelController.match(for: quit, screen: .applications,
+            firstResponder: NSTextView(), matcher: &matcher) == .command(.terminateApplication))
+        let repeated = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: .command, timestamp: 0, windowNumber: 0, context: nil,
+            characters: "q", charactersIgnoringModifiers: "q", isARepeat: true, keyCode: UInt16(kVK_ANSI_Q)))
+        #expect(OverlayPanelController.match(for: repeated, screen: .applications,
+            firstResponder: nil, matcher: &matcher) == .consumed)
+    }
+
     @Test(arguments: [BrowserScreen.applications, .windows(applicationID: 1)])
     func customNavigationWorksOutsideTheSearchField(screen: BrowserScreen) throws {
         var matcher = NavigationKeyMatcher(bindings: .vim)

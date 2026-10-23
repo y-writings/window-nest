@@ -97,12 +97,16 @@ public enum BindingConflict: Error, Equatable, CustomStringConvertible {
 
 public enum NavigationBindingValidator {
     public static let reservedKeys: Set<String> = ["left", "right", "up", "down", "return", "keypadEnter", "escape", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+    public static let reservedStrokes: Set<KeyStroke> = [
+        KeyStroke(key: "q", modifiers: .command), KeyStroke(key: "w", modifiers: .command),
+        KeyStroke(key: "return", modifiers: .command), KeyStroke(key: "keypadEnter", modifiers: .command),
+    ]
     public static func validate(_ bindings: NavigationBindings, globalShortcut: KeyStroke? = nil) -> BindingConflict? {
         var seen: [(KeySequence, NavigationAction)] = []
         for action in NavigationAction.allCases {
             for sequence in bindings.assignments[action] ?? [] {
                 guard (1...2).contains(sequence.strokes.count), sequence.strokes.allSatisfy({ !$0.key.isEmpty }) else { return .invalidLength }
-                if let stroke = sequence.strokes.first(where: { $0.modifiers.isEmpty && reservedKeys.contains($0.key) }) { return .reserved(stroke) }
+                if let stroke = sequence.strokes.first(where: { ($0.modifiers.isEmpty && reservedKeys.contains($0.key)) || reservedStrokes.contains($0) }) { return .reserved(stroke) }
                 if let globalShortcut, let stroke = sequence.strokes.first(where: { $0 == globalShortcut }) { return .globalShortcut(stroke) }
                 for (other, otherAction) in seen {
                     if sequence == other { return .duplicate(sequence, otherAction) }
@@ -172,8 +176,18 @@ public final class NavigationBindingsStore: @unchecked Sendable {
     private let defaults: UserDefaults; private let key: String
     public init(defaults: UserDefaults = .standard, key: String = "navigationBindings") { self.defaults = defaults; self.key = key }
     public func load() -> NavigationBindings {
-        guard let data = defaults.data(forKey: key), let value = try? JSONDecoder().decode(NavigationBindings.self, from: data), NavigationBindingValidator.validate(value) == nil else { return .standard }
-        return value
+        guard let data = defaults.data(forKey: key), let value = try? JSONDecoder().decode(NavigationBindings.self, from: data) else { return .standard }
+        // Settings written by an older version may contain a newly reserved key. Keep every
+        // independent valid assignment instead of discarding the user's complete configuration.
+        var result = NavigationBindings.standard
+        for action in NavigationAction.allCases {
+            for sequence in value.assignments[action] ?? [] {
+                var candidate = result
+                candidate.assignments[action, default: []].append(sequence)
+                if NavigationBindingValidator.validate(candidate) == nil { result = candidate }
+            }
+        }
+        return result
     }
     public func save(_ value: NavigationBindings) throws {
         if let conflict = NavigationBindingValidator.validate(value) { throw conflict }

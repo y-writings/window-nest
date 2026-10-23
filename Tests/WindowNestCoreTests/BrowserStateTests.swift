@@ -30,6 +30,22 @@ private func fixtures() -> [ApplicationItem] {
     #expect(state.visibleWindows.map(\.title) == ["One", "Two"])
 }
 
+@Test func destructiveCommandsKeepTheExactSelectedIdentity() {
+    var state = BrowserState(applications: fixtures())
+    _ = state.handle(.moveRight)
+    #expect(state.handle(.terminateApplication) == .terminateApplication(2))
+    #expect(state.handle(.showWindows) == .none)
+    #expect(state.screen == .windows(applicationID: 2))
+    #expect(state.handle(.closeWindow) == .closeWindow(.init(processIdentifier: 2, windowNumber: 21)))
+}
+
+@Test func explicitlyShowsAOneWindowNestWithoutChangingReturnBehavior() {
+    var state = BrowserState(applications: fixtures())
+    _ = state.handle(.moveRight)
+    #expect(state.handle(.showWindows) == .none)
+    #expect(state.screen == .windows(applicationID: 2))
+}
+
 @Test func selectingSingleWindowApplicationDoesNotActivateIt() {
     var state = BrowserState(applications: fixtures())
     #expect(state.handle(.moveRight) == .none)

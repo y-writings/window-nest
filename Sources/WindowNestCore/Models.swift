@@ -70,6 +70,7 @@ public enum NavigationCommand: Equatable, Sendable {
     case moveLeft, moveRight, moveUp, moveDown, confirm, escape
     case moveToRowStart, moveToRowEnd, moveToListStart, moveToListEnd
     case chooseNumber(Int)
+    case showWindows, terminateApplication, closeWindow
 }
 
 public enum BrowserEffect: Equatable, Sendable {
@@ -77,4 +78,6 @@ public enum BrowserEffect: Equatable, Sendable {
     case dismiss
     case refresh
     case activate(WindowID)
+    case terminateApplication(Int32)
+    case closeWindow(WindowID)
 }
