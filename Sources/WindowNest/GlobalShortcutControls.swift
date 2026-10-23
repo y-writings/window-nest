@@ -5,7 +5,11 @@ import SwiftUI
 @MainActor
 struct GlobalShortcutControls: View {
     @ObservedObject var settings: ShortcutSettings
-    @State private var draft: GlobalShortcutConfiguration
+    // The explicit argument selects State's property-wrapper initializer rather
+    // than the zero-argument State macro in newer macOS SDKs. The real initial
+    // value is installed by init below.
+    @State(initialValue: GlobalShortcutConfiguration(keyCode: 0, modifiers: 0))
+    private var draft: GlobalShortcutConfiguration
 
     init(settings: ShortcutSettings) {
         self.settings = settings

@@ -5,7 +5,7 @@ WindowNest は、起動中のアプリとそのウインドウをキーボード
 ## 動作環境
 
 - macOS 14 Sonoma 以降（`SCScreenshotManager` を使用するため）
-- Swift 6.0 以降 / Xcode 16 以降
+- Swift 6.0 以降 / Xcode 16 以降（完全版 Xcode を推奨）
 - Accessibility（アクセシビリティ）権限
 - Screen & System Audio Recording（画面収録）権限（サムネイル表示用）
 
@@ -14,6 +14,31 @@ WindowNest は、起動中のアプリとそのウインドウをキーボード
 ## ビルドと起動
 
 macOS の Swift / Xcode ツールチェーンを使用します。
+
+macOS 27 SDK では SwiftUI の `@State` に同名のマクロが追加されています。WindowNest は
+`State` の property wrapper initializer を明示しているため、`SwiftUIMacros` を含まない
+Command Line Tools だけの環境でも通常のビルドと app bundle の作成ができます。
+
+```bash
+xcode-select -p
+mise run build
+mise run app
+```
+
+`external macro implementation type 'SwiftUIMacros.StateMacro' could not be found` が表示される場合は、
+この対応を含む最新版であることを確認してください。別のソースや依存パッケージで同じエラーが出る場合は、
+完全版 Xcode をインストールし、使用する Developer Directory を切り替えます。
+
+```bash
+sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+xcode-select -p
+xcrun swift --version
+mise run build
+```
+
+`xcode-select -p` が `/Library/Developer/CommandLineTools` を示す場合は Command Line Tools、
+`/Applications/Xcode.app/Contents/Developer` を示す場合は完全版 Xcode が選択されています。
+Xcode の配置先が異なる場合は、実際の `.app/Contents/Developer` を指定してください。
 
 ```bash
 mise run app
@@ -202,7 +227,10 @@ Settings の「Cursor movement」では8種類の移動に1打鍵または2打�
 mise run test
 ```
 
-Command Line Tools の環境で `TestingMacros` の読み込みエラーが出る場合は、`mise run docker:test` を利用してください。
+macOS 27 SDK の Command Line Tools には Swift Testing の `TestingMacros` が含まれない構成があります。
+その場合、通常ビルドの `SwiftUIMacros` 問題とは別に `mise run test` が失敗するため、上記の手順で
+完全版 Xcode に切り替えて `mise run test` を実行してください。共通ロジックだけを確認する場合は
+`mise run docker:test` も利用できますが、Docker では macOS 固有のターゲットと UI は検証されません。
 
 自動テストは、アプリ単位のグループ、1件時の直接前面化と明示的な nest 表示、終了・個別閉鎖の対象選択、複数件時の2段階の状態遷移、矢印/数字選択、戻る操作、対象消失時の安全な選択更新、タイトルなし・取得不能時の位置照合、不一致・曖昧な候補の拒否を検証します。
 
