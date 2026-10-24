@@ -228,7 +228,7 @@ struct OverlayView: View {
     @FocusState private var searchFocused: Bool
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
 
-    private enum CardID: Hashable {
+    enum CardID: Hashable {
         case application(Int32)
         case window(WindowID)
     }
@@ -337,6 +337,10 @@ struct OverlayView: View {
     }
 
     private func scrollToSelection(with proxy: ScrollViewProxy) {
+        if let id = selectedCardID { proxy.scrollTo(id, anchor: .center) }
+    }
+
+    var selectedCardID: CardID? {
         let id: CardID?
         switch model.state.screen {
         case .applications:
@@ -348,7 +352,7 @@ struct OverlayView: View {
             id = windows.indices.contains(model.state.selectedIndex)
                 ? .window(windows[model.state.selectedIndex].id) : nil
         }
-        if let id { proxy.scrollTo(id, anchor: .center) }
+        return id
     }
 
     private func scrollToFirstApplication(with proxy: ScrollViewProxy) {
@@ -429,8 +433,6 @@ private struct AppCard: View {
             VStack(alignment: .leading) { Text(app.name).font(.headline).lineLimit(1); Text("\(app.windows.count) window\(app.windows.count == 1 ? "" : "s")").foregroundStyle(.secondary) }
             Spacer()
         }.padding(16).frame(maxWidth: .infinity, minHeight: 92).cardStyle(selected: selected)
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("application-card-\(app.id)")
     }
 }
 
@@ -445,8 +447,6 @@ private struct WindowCard: View {
             }.aspectRatio(16 / 10, contentMode: .fit)
             Text(window.title).font(.headline).lineLimit(1)
         }.padding(12).cardStyle(selected: selected)
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("window-card-\(window.id.processIdentifier)-\(window.id.windowNumber)")
     }
 }
 
