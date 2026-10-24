@@ -211,7 +211,9 @@ struct SettingsView: View {
 private struct NavigationBindingRow: View {
     @ObservedObject var settings: ShortcutSettings
     let action: NavigationAction
-    @State private var recording = NavigationKeyRecording()
+    // Spell out the property-wrapper initializer so Swift does not select the
+    // zero-argument SwiftUIMacros.StateMacro shipped in newer macOS SDKs.
+    @State(initialValue: NavigationKeyRecording()) private var recording: NavigationKeyRecording
     private var title: String {
         switch action {
         case .left: "Left"; case .down: "Down"; case .up: "Up"; case .right: "Right"
