@@ -228,6 +228,11 @@ struct OverlayView: View {
     @FocusState private var searchFocused: Bool
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
 
+    enum CardID: Hashable {
+        case application(Int32)
+        case window(WindowID)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             dragHandle
@@ -305,30 +310,55 @@ struct OverlayView: View {
                     if case .applications = model.state.screen {
                         ForEach(Array(model.state.visibleApplications.enumerated()), id: \.element.id) { index, app in
                             AppCard(app: app, icon: model.icons[app.id], selected: index == model.state.selectedIndex)
-                                .id(index)
+                                .id(CardID.application(app.id))
                         }
                     } else {
                         ForEach(Array(model.state.visibleWindows.enumerated()), id: \.element.id) { index, window in
                             WindowCard(window: window, thumbnail: model.thumbnails[window.id], number: index < 9 ? index + 1 : nil, selected: index == model.state.selectedIndex)
-                                .id(index)
+                                .id(CardID.window(window.id))
                         }
                     }
                 }.padding(4)
             }
             .id(model.state.screen)
-            .onAppear { proxy.scrollTo(model.state.selectedIndex, anchor: .center) }
-            .onChange(of: model.state.selectedIndex) { _, index in
+            .onAppear { scrollToSelection(with: proxy) }
+            .onChange(of: model.state.selectedIndex) { _, _ in
                 withAnimation(.easeOut(duration: 0.12)) {
-                    proxy.scrollTo(index, anchor: .center)
+                    scrollToSelection(with: proxy)
                 }
             }
             .onChange(of: model.state.searchQuery) { _, _ in
-                proxy.scrollTo(0, anchor: .top)
+                scrollToFirstApplication(with: proxy)
             }
             .onChange(of: model.state.searchMode) { _, _ in
-                if case .applications = model.state.screen { proxy.scrollTo(0, anchor: .top) }
+                scrollToFirstApplication(with: proxy)
             }
         }
+    }
+
+    private func scrollToSelection(with proxy: ScrollViewProxy) {
+        if let id = selectedCardID { proxy.scrollTo(id, anchor: .center) }
+    }
+
+    var selectedCardID: CardID? {
+        let id: CardID?
+        switch model.state.screen {
+        case .applications:
+            let applications = model.state.visibleApplications
+            id = applications.indices.contains(model.state.selectedIndex)
+                ? .application(applications[model.state.selectedIndex].id) : nil
+        case .windows:
+            let windows = model.state.visibleWindows
+            id = windows.indices.contains(model.state.selectedIndex)
+                ? .window(windows[model.state.selectedIndex].id) : nil
+        }
+        return id
+    }
+
+    private func scrollToFirstApplication(with proxy: ScrollViewProxy) {
+        guard case .applications = model.state.screen,
+              let id = model.state.visibleApplications.first?.id else { return }
+        proxy.scrollTo(CardID.application(id), anchor: .top)
     }
 
     private func focusSearchIfNeeded() {
