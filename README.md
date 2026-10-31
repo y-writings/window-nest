@@ -29,7 +29,8 @@ brew trust --formula y-writings/window-nest/window-nest
 brew install window-nest
 ```
 
-`brew install y-writings/window-nest/window-nest` も、同じ Formula だけを信頼してからインストールします。
+URL 付きの `brew tap` は省略できません。`brew install` だけだと、`y-writings/homebrew-window-nest` という別リポジトリを探しにいきます。
+tap したあとに `brew install y-writings/window-nest/window-nest` を実行しても、同じ Formula だけを信頼してインストールします。
 この場合、`--formula` を別に打たなくても信頼が記録されます。
 短い名前の `brew install window-nest` を使う前には、上の `brew trust --formula` が必要です。
 
