@@ -11,6 +11,58 @@ WindowNest は、起動中のアプリとそのウインドウをキーボード
 
 初期検証対象は macOS 27.0.1 です。CI 環境は macOS 実機ではないため、実際のウインドウ列挙・キャプチャ・前面化については下記の実機確認手順を実施してください。
 
+## Homebrew
+
+このリポジトリを Homebrew の tap として追加し、Formula からインストールできます。
+リポジトリ名が `homebrew-` で始まらないため、tap するときに URL を指定します。
+ビルド済みの `.app` は配布していないので、Formula は macOS 上でソースから `WindowNest.app` をビルドします。
+必要な環境は上記と同じです（macOS 14 以降、Swift 6.0 以降）。Homebrew 6.0 以降が必要です。
+
+Homebrew 6.0 以降、公式以外の tap にある Formula は、信頼するまで読み込まれません。
+信頼していない Formula はインストールできず、あとから `brew upgrade` もできません。
+信頼対象は tap 全体ではなく、この Formula だけにしてください。
+`brew trust` の `--formula` が、その指定をするフラグです。
+
+```bash
+brew tap y-writings/window-nest https://github.com/y-writings/window-nest
+brew trust --formula y-writings/window-nest/window-nest
+brew install window-nest
+```
+
+`brew install y-writings/window-nest/window-nest` も、同じ Formula だけを信頼してからインストールします。
+この場合、`--formula` を別に打たなくても信頼が記録されます。
+短い名前の `brew install window-nest` を使う前には、上の `brew trust --formula` が必要です。
+
+安定版がビルドするのはタグ `weekly-2026.10.26` です。
+`main` の最新コミットをビルドする場合は、同じ信頼のあとに次を実行します。
+
+```bash
+brew install --HEAD y-writings/window-nest/window-nest
+```
+
+起動は次のどちらかです。`window-nest` はメニューバーアプリを開いてすぐに戻ります。
+
+```bash
+window-nest
+open "$(brew --prefix)/opt/window-nest/WindowNest.app"
+```
+
+初回は「権限設定」のとおり、アクセシビリティと画面収録を許可してください。
+許可するアプリは、開発ビルドの `.build/WindowNest.app` ではなく、Homebrew が置いた次のバンドルです。
+
+```text
+$(brew --prefix)/opt/window-nest/WindowNest.app
+```
+
+システム設定の一覧に無い場合は、**＋** からこのパスを追加します。
+`⌘⇧G` で場所を入力できます。
+
+Formula の署名は、`CODE_SIGN_IDENTITY` を設定しないときの `make app` と同じアドホック署名です。
+`brew upgrade` で中身が変わると署名が変わり、許可済みでも権限が効かなくなることがあります。
+そのときは「権限設定」の `tccutil reset` 手順で、このバンドルを許可し直してください。
+
+新しい `weekly-*` タグを安定版にするには、`Formula/window-nest.rb` の `url` と `sha256` を、そのタグの GitHub アーカイブに更新します。
+
 ## ビルドと起動
 
 macOS の Swift / Xcode ツールチェーンを使用します。
