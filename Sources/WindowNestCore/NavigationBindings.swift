@@ -72,6 +72,11 @@ public struct NavigationBindings: Codable, Equatable, Sendable {
     public var assignments: [NavigationAction: [KeySequence]]
     public init(assignments: [NavigationAction: [KeySequence]] = [:]) { self.assignments = assignments }
     public static let standard = Self()
+    /// Whether at least one usable sequence is configured. Empty assignment buckets left by
+    /// settings edits are intentionally treated like the Standard preset.
+    public var hasAdditionalKeys: Bool {
+        assignments.values.joined().contains { !$0.strokes.isEmpty }
+    }
     public static let vim = Self(assignments: [
         .left: [KeySequence([KeyStroke(key: "h")])], .down: [KeySequence([KeyStroke(key: "j")])],
         .up: [KeySequence([KeyStroke(key: "k")])], .right: [KeySequence([KeyStroke(key: "l")])],
