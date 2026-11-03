@@ -33,10 +33,24 @@ func matchesByGeometryWhenATitleIsUnavailable(titles: (String?, String?)) {
     #expect(target.uniqueMatch(in: [WindowAttributes(title: "Untitled Window", frame: secondFrame)]) == nil)
 }
 
-@Test func refusesNonmatchingOrMissingIdentityEvidence() {
+@Test func acceptsDifferentTitlesWhenGeometryIsUnique() {
+    let target = WindowAttributes(title: "CG title", frame: secondFrame)
+    let candidates = [WindowAttributes(title: "Accessibility title — Dia", frame: secondFrame)]
+    #expect(target.uniqueMatch(in: candidates) == 0)
+}
+
+@Test func usesTitlesToDisambiguateSharedGeometry() {
+    let target = WindowAttributes(title: "Selected", frame: secondFrame)
+    let candidates = [
+        WindowAttributes(title: "Other", frame: secondFrame),
+        WindowAttributes(title: "Selected", frame: secondFrame),
+    ]
+    #expect(target.uniqueMatch(in: candidates) == 1)
+}
+
+@Test func refusesMissingIdentityEvidence() {
     let target = WindowAttributes(title: "Selected", frame: secondFrame)
     #expect(target.uniqueMatch(in: []) == nil)
-    #expect(target.uniqueMatch(in: [WindowAttributes(title: "Unrelated", frame: secondFrame)]) == nil)
     #expect(target.uniqueMatch(in: [WindowAttributes(title: "Selected", frame: firstFrame)]) == nil)
     #expect(target.uniqueMatch(in: [WindowAttributes(title: "Selected", frame: nil)]) == nil)
     #expect(WindowAttributes(title: "Selected", frame: nil).uniqueMatch(in: [target]) == nil)

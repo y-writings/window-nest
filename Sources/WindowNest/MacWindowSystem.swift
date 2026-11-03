@@ -1,11 +1,18 @@
 #if os(macOS)
 import AppKit
 @preconcurrency import ApplicationServices
+import os
 @preconcurrency import ScreenCaptureKit
 import WindowNestCore
 
 @MainActor
 final class MacWindowSystem {
+    enum ActivationResult: Equatable {
+        case activated
+        case failed(String)
+    }
+
+    private static let logger = Logger(subsystem: "com.ywritings.WindowNest", category: "WindowActivation")
     struct Snapshot { let applications: [ApplicationItem]; let icons: [Int32: NSImage]; let permission: PermissionState }
     private struct WindowDescription { let id: WindowID; let attributes: WindowAttributes }
     private struct AccessibilityWindow { let element: AXUIElement; let attributes: WindowAttributes }
@@ -58,21 +65,42 @@ final class MacWindowSystem {
         } catch { return nil }
     }
 
-    func activate(_ id: WindowID) async -> Bool {
-        guard AXIsProcessTrusted(), let app = NSRunningApplication(processIdentifier: id.processIdentifier) else { return false }
+    func activate(_ id: WindowID) async -> ActivationResult {
+        func failure(_ reason: String) -> ActivationResult {
+            Self.logger.error("Activation failed for pid=\(id.processIdentifier) window=\(id.windowNumber): \(reason, privacy: .public)")
+            return .failed(reason)
+        }
+        guard AXIsProcessTrusted() else { return failure("Accessibility permission is unavailable.") }
+        guard let app = NSRunningApplication(processIdentifier: id.processIdentifier) else {
+            return failure("The application is no longer running.")
+        }
         let running = [id.processIdentifier: app]
         let windows = Self.windowDescriptions(running: running)
-        guard let target = windows.firstIndex(where: { $0.id == id }) else { return false }
+        guard let target = windows.firstIndex(where: { $0.id == id }) else {
+            return failure("The selected window is no longer available.")
+        }
         let axWindows = Self.accessibilityWindows(for: id.processIdentifier)
         let attributes = windows.map(\.attributes)
         let axAttributes = axWindows.map(\.attributes)
         guard let match = attributes[target].uniqueMatch(in: axAttributes),
-              axAttributes[match].uniqueMatch(in: attributes) == target else { return false }
+              axAttributes[match].uniqueMatch(in: attributes) == target else {
+            return failure("The selected window could not be matched safely.")
+        }
 
         // Recheck after AX calls: the selected CG window may have closed or moved meanwhile.
-        guard Self.windowDescriptions(running: running).contains(where: { $0.id == id && $0.attributes == attributes[target] }),
-              AXUIElementPerformAction(axWindows[match].element, kAXRaiseAction as CFString) == .success else { return false }
-        return app.activate(options: [.activateIgnoringOtherApps])
+        guard Self.windowDescriptions(running: running).contains(where: { $0.id == id && $0.attributes == attributes[target] }) else {
+            return failure("The selected window changed before it could be activated.")
+        }
+        guard app.activate(options: [.activateIgnoringOtherApps]) else {
+            return failure("macOS did not activate the application.")
+        }
+        // Raise after activating the application. Chromium-based applications may restore their
+        // previous key window during activation and otherwise undo an earlier AX raise.
+        guard AXUIElementPerformAction(axWindows[match].element, kAXRaiseAction as CFString) == .success else {
+            return failure("macOS did not raise the selected window.")
+        }
+        Self.logger.info("Activated pid=\(id.processIdentifier) window=\(id.windowNumber)")
+        return .activated
     }
 
     func terminateApplication(_ pid: Int32) async -> Bool {

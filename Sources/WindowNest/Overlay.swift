@@ -15,6 +15,7 @@ final class OverlayModel: ObservableObject {
     @Published var navigationBindings: NavigationBindings = .standard
     @Published var inputMode: InputMode = .search
     @Published private(set) var operationInProgress = false
+    @Published private(set) var activationFailure: String?
     var dismiss: () -> Void = {}
     var resetKeySequence: () -> Void = {}
     private let system: MacWindowSystem
@@ -45,9 +46,14 @@ final class OverlayModel: ObservableObject {
         case .dismiss: dismiss()
         case .refresh: Task { await reload() }
         case .activate(let id):
+            activationFailure = nil
             Task {
-                if await system.activate(id) { dismiss() }
-                else { await reload() }
+                switch await system.activate(id) {
+                case .activated: dismiss()
+                case .failed(let reason):
+                    activationFailure = reason
+                    await reload()
+                }
             }
         case .terminateApplication(let pid):
             performDestructiveOperation { [system] in await system.terminateApplication(pid) }
@@ -300,6 +306,12 @@ struct OverlayView: View {
                 ContentUnavailableView.search(text: model.state.searchQuery)
             }
             else { cards }
+            if let failure = model.activationFailure {
+                Label(failure, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .accessibilityLabel("Window activation failed: \(failure)")
+            }
             footer
         }
         .padding(20)
