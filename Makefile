@@ -1,4 +1,4 @@
-.PHONY: build test app clean
+.PHONY: build test app clean uninstall
 
 CODE_SIGN_IDENTITY ?= -
 
@@ -23,3 +23,6 @@ endif
 
 clean:
 	swift package clean
+
+uninstall:
+	rm -rf .build/WindowNest.app
