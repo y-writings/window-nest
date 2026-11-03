@@ -14,6 +14,24 @@ struct OverlayNavigationTests {
             characters: characters, charactersIgnoringModifiers: characters, isARepeat: isRepeat, keyCode: UInt16(code)))
     }
 
+    @Test(arguments: [NavigationBindings.standard, .vim])
+    func backButtonRestoresApplicationInputMode(bindings: NavigationBindings) {
+        let window = WindowItem(id: WindowID(processIdentifier: 1, windowNumber: 1), title: "Window")
+        let model = OverlayModel(system: MacWindowSystem())
+        model.state = BrowserState(applications: [ApplicationItem(id: 1, name: "App", windows: [window])])
+        model.navigationBindings = bindings
+        #expect(model.state.handle(.showWindows) == .none)
+        model.inputMode = .list
+        var resets = 0
+        model.resetKeySequence = { resets += 1 }
+
+        model.send(.escape)
+
+        #expect(model.state.screen == .applications)
+        #expect(model.inputMode == (bindings.hasAdditionalKeys ? .list : .search))
+        #expect(resets == 1)
+    }
+
     @Test func searchTypingTakesPriorityAndDiscardsPendingNavigation() throws {
         let editor = NSTextView()
         var bindings = NavigationBindings.vim

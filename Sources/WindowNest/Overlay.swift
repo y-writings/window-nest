@@ -28,7 +28,9 @@ final class OverlayModel: ObservableObject {
         let snapshot = await system.snapshot(promptForAccessibility: prompt)
         permission = snapshot.permission
         icons = snapshot.icons
+        let priorScreen = state.screen
         state.replaceApplications(snapshot.applications)
+        updateInputModeIfScreenChanged(from: priorScreen)
         loading = false
         refreshThumbnails()
     }
@@ -36,6 +38,7 @@ final class OverlayModel: ObservableObject {
     func send(_ command: NavigationCommand) {
         let priorScreen = state.screen
         let effect = state.handle(command)
+        updateInputModeIfScreenChanged(from: priorScreen)
         switch effect {
         case .none:
             if priorScreen != state.screen { refreshThumbnails() }
@@ -51,6 +54,12 @@ final class OverlayModel: ObservableObject {
         case .closeWindow(let id):
             performDestructiveOperation { [system] in await system.closeWindow(id) }
         }
+    }
+
+    private func updateInputModeIfScreenChanged(from priorScreen: BrowserScreen) {
+        guard priorScreen != state.screen else { return }
+        resetKeySequence()
+        inputMode = state.screen == .applications && !navigationBindings.hasAdditionalKeys ? .search : .list
     }
 
     private func performDestructiveOperation(_ operation: @escaping @MainActor () async -> Bool) {
@@ -166,8 +175,7 @@ final class OverlayPanelController {
         panel.makeKeyAndOrderFront(nil)
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, event.window === self.panel else { return event }
-            let priorScreen = self.model.state.screen
-            let result = Self.match(for: event, screen: priorScreen,
+            let result = Self.match(for: event, screen: self.model.state.screen,
                 firstResponder: self.panel.firstResponder,
                 hasAdditionalKeys: self.settings.activeNavigationBindings.hasAdditionalKeys,
                 matcher: &self.matcher)
@@ -182,14 +190,6 @@ final class OverlayPanelController {
                 self.model.inputMode = .list
             case .command(let command):
                 self.model.send(command)
-                if priorScreen != self.model.state.screen {
-                    self.matcher.reset()
-                    if case .applications = self.model.state.screen {
-                        self.model.inputMode = self.settings.activeNavigationBindings.hasAdditionalKeys ? .list : .search
-                    } else {
-                        self.model.inputMode = .list
-                    }
-                }
             }
             return nil
         }
