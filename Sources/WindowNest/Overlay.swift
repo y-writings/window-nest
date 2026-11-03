@@ -6,12 +6,14 @@ import WindowNestCore
 
 @MainActor
 final class OverlayModel: ObservableObject {
+    enum InputMode { case list, search }
     @Published var state = BrowserState()
     @Published var icons: [Int32: NSImage] = [:]
     @Published var thumbnails: [WindowID: NSImage] = [:]
     @Published var permission: PermissionState = .ready
     @Published var loading = false
     @Published var navigationBindings: NavigationBindings = .standard
+    @Published var inputMode: InputMode = .search
     @Published private(set) var operationInProgress = false
     var dismiss: () -> Void = {}
     var resetKeySequence: () -> Void = {}
@@ -26,7 +28,9 @@ final class OverlayModel: ObservableObject {
         let snapshot = await system.snapshot(promptForAccessibility: prompt)
         permission = snapshot.permission
         icons = snapshot.icons
+        let priorScreen = state.screen
         state.replaceApplications(snapshot.applications)
+        updateInputModeIfScreenChanged(from: priorScreen)
         loading = false
         refreshThumbnails()
     }
@@ -34,6 +38,7 @@ final class OverlayModel: ObservableObject {
     func send(_ command: NavigationCommand) {
         let priorScreen = state.screen
         let effect = state.handle(command)
+        updateInputModeIfScreenChanged(from: priorScreen)
         switch effect {
         case .none:
             if priorScreen != state.screen { refreshThumbnails() }
@@ -49,6 +54,12 @@ final class OverlayModel: ObservableObject {
         case .closeWindow(let id):
             performDestructiveOperation { [system] in await system.closeWindow(id) }
         }
+    }
+
+    private func updateInputModeIfScreenChanged(from priorScreen: BrowserScreen) {
+        guard priorScreen != state.screen else { return }
+        resetKeySequence()
+        inputMode = state.screen == .applications && !navigationBindings.hasAdditionalKeys ? .search : .list
     }
 
     private func performDestructiveOperation(_ operation: @escaping @MainActor () async -> Bool) {
@@ -98,6 +109,9 @@ final class OverlayModel: ObservableObject {
 
 @MainActor
 final class OverlayPanelController {
+    enum EventResult: Equatable {
+        case unhandled, consumed, command(NavigationCommand), startSearch, leaveSearch
+    }
     private let model: OverlayModel
     private let panel: NSPanel
     private var keyMonitor: Any?
@@ -127,7 +141,15 @@ final class OverlayPanelController {
         model.navigationBindings = settings.activeNavigationBindings
         model.resetKeySequence = { [weak self] in self?.matcher.reset() }
         navigationObserver = NotificationCenter.default.addObserver(forName: .navigationBindingsDidChange, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { guard let self else { return }; self.matcher.update(self.settings.activeNavigationBindings); self.model.navigationBindings = self.settings.activeNavigationBindings }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let bindings = self.settings.activeNavigationBindings
+                self.matcher.update(bindings)
+                self.model.navigationBindings = bindings
+                if self.panel.isVisible, case .applications = self.model.state.screen {
+                    self.model.inputMode = bindings.hasAdditionalKeys ? .list : .search
+                }
+            }
         }
         resignObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.matcher.reset() }
@@ -147,19 +169,27 @@ final class OverlayPanelController {
     func present() {
         guard !panel.isVisible else { close(); return }
         model.state = BrowserState(searchMode: model.state.searchMode)
+        model.inputMode = settings.activeNavigationBindings.hasAdditionalKeys ? .list : .search
+        matcher.reset()
         panel.center()
         panel.makeKeyAndOrderFront(nil)
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, event.window === self.panel else { return event }
-            let priorScreen = self.model.state.screen
-            let result = Self.match(for: event, screen: priorScreen,
-                firstResponder: self.panel.firstResponder, matcher: &self.matcher)
+            let result = Self.match(for: event, screen: self.model.state.screen,
+                firstResponder: self.panel.firstResponder,
+                hasAdditionalKeys: self.settings.activeNavigationBindings.hasAdditionalKeys,
+                matcher: &self.matcher)
             switch result {
             case .unhandled: return event
             case .consumed: break
+            case .startSearch:
+                self.matcher.reset()
+                self.model.inputMode = .search
+            case .leaveSearch:
+                self.matcher.reset()
+                self.model.inputMode = .list
             case .command(let command):
                 self.model.send(command)
-                if priorScreen != self.model.state.screen { self.matcher.reset() }
             }
             return nil
         }
@@ -174,7 +204,8 @@ final class OverlayPanelController {
     }
 
     static func match(for event: NSEvent, screen: BrowserScreen, firstResponder: NSResponder?,
-                      matcher: inout NavigationKeyMatcher) -> NavigationKeyMatcher.MatchResult {
+                      hasAdditionalKeys: Bool = false,
+                      matcher: inout NavigationKeyMatcher) -> EventResult {
         let searchEditor = screen == .applications ? firstResponder as? NSTextView : nil
         let builtIn = command(for: event)
         if event.isARepeat, builtIn == .terminateApplication || builtIn == .closeWindow || builtIn == .showWindows {
@@ -186,6 +217,10 @@ final class OverlayPanelController {
             if builtIn == .terminateApplication || builtIn == .closeWindow { return .consumed }
             return .unhandled
         }
+        if searchEditor != nil, builtIn == .escape, hasAdditionalKeys {
+            matcher.reset()
+            return .leaveSearch
+        }
         if let builtIn {
             matcher.reset()
             if screen == .applications, case .chooseNumber = builtIn { return .unhandled }
@@ -196,8 +231,27 @@ final class OverlayPanelController {
             matcher.reset()
             return .unhandled
         }
+        if screen == .applications, isSearchShortcut(event) {
+            matcher.reset()
+            return .startSearch
+        }
         guard let stroke = event.navigationStroke else { return .unhandled }
-        return matcher.process(stroke, at: event.timestamp, isRepeat: event.isARepeat)
+        switch matcher.process(stroke, at: event.timestamp, isRepeat: event.isARepeat) {
+        case .unhandled: return .unhandled
+        case .consumed: return .consumed
+        case .command(let command): return .command(command)
+        }
+    }
+
+    /// Search shortcuts win over custom movement sequences in the Applications list. This keeps
+    /// search keyboard-accessible even when `/` and Command-F were saved as movement bindings;
+    /// those bindings remain available in the Windows list and are never removed from settings.
+    private static func isSearchShortcut(_ event: NSEvent) -> Bool {
+        let explicitModifiers: NSEvent.ModifierFlags = [.shift, .control, .option, .command]
+        let modifiers = event.modifierFlags.intersection(explicitModifiers)
+        let stroke = event.navigationStroke
+        return (modifiers.isEmpty && stroke == KeyStroke(key: "/"))
+            || (modifiers == .command && stroke == KeyStroke(key: "f", modifiers: .command))
     }
 
     private static func command(for event: NSEvent) -> NavigationCommand? {
@@ -253,6 +307,12 @@ struct OverlayView: View {
         .background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 20))
         .onAppear { focusSearchIfNeeded() }
         .onChange(of: model.state.screen) { _, _ in focusSearchIfNeeded() }
+        .onChange(of: model.inputMode) { _, _ in focusSearchIfNeeded() }
+        .onChange(of: searchFocused) { _, focused in
+            guard case .applications = model.state.screen else { return }
+            model.inputMode = focused ? .search : .list
+            model.resetKeySequence()
+        }
     }
 
     private var dragHandle: some View {
@@ -286,6 +346,9 @@ struct OverlayView: View {
                     ))
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
+                    .accessibilityHint(searchFocused
+                        ? "Type to filter applications. Press Escape to return to the application list."
+                        : "Press slash or Command-F to search applications.")
                     if !model.state.searchQuery.isEmpty {
                         Button { model.state.updateSearchQuery(""); searchFocused = true } label: {
                             Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
@@ -362,14 +425,20 @@ struct OverlayView: View {
     }
 
     private func focusSearchIfNeeded() {
-        if case .applications = model.state.screen {
-            DispatchQueue.main.async { searchFocused = true }
+        let shouldFocus = model.state.screen == .applications && model.inputMode == .search
+        guard searchFocused != shouldFocus else { return }
+        // Defer only the requested transition. Later data and thumbnail updates do not schedule
+        // another focus operation, so they cannot steal focus back from the list.
+        DispatchQueue.main.async {
+            guard model.state.screen == .applications,
+                  model.inputMode == (shouldFocus ? .search : .list) else { return }
+            searchFocused = shouldFocus
         }
     }
 
     private var footer: some View {
         HStack {
-            Text("← ↑ ↓ → Select   ⏎ Confirm   esc Back")
+            Text(primaryFooterHint)
             let custom = modelFooterBindings
             if !custom.isEmpty { Text(custom) }
             if case .windows = model.state.screen {
@@ -384,7 +453,20 @@ struct OverlayView: View {
             .lineLimit(1)
     }
 
+    private var primaryFooterHint: String {
+        if case .applications = model.state.screen {
+            if model.inputMode == .search {
+                return model.navigationBindings.hasAdditionalKeys
+                    ? "Type to search   ↑ ↓ Select   ⏎ Confirm   esc List"
+                    : "Type to search   ← ↑ ↓ → Select   ⏎ Confirm   esc Close"
+            }
+            return "/ or ⌘F Search   ← ↑ ↓ → Select   ⏎ Confirm   esc Close"
+        }
+        return "← ↑ ↓ → Select   ⏎ Confirm   esc Applications"
+    }
+
     private var modelFooterBindings: String {
+        guard model.inputMode == .list else { return "" }
         return NavigationAction.allCases.compactMap { action in
             let keys = model.navigationBindings.assignments[action, default: []].map(\.description).joined(separator: ",")
             return keys.isEmpty ? nil : "\(keys):\(action.rawValue)"

@@ -14,6 +14,24 @@ struct OverlayNavigationTests {
             characters: characters, charactersIgnoringModifiers: characters, isARepeat: isRepeat, keyCode: UInt16(code)))
     }
 
+    @Test(arguments: [NavigationBindings.standard, .vim])
+    func backButtonRestoresApplicationInputMode(bindings: NavigationBindings) {
+        let window = WindowItem(id: WindowID(processIdentifier: 1, windowNumber: 1), title: "Window")
+        let model = OverlayModel(system: MacWindowSystem())
+        model.state = BrowserState(applications: [ApplicationItem(id: 1, name: "App", windows: [window])])
+        model.navigationBindings = bindings
+        #expect(model.state.handle(.showWindows) == .none)
+        model.inputMode = .list
+        var resets = 0
+        model.resetKeySequence = { resets += 1 }
+
+        model.send(.escape)
+
+        #expect(model.state.screen == .applications)
+        #expect(model.inputMode == (bindings.hasAdditionalKeys ? .list : .search))
+        #expect(resets == 1)
+    }
+
     @Test func searchTypingTakesPriorityAndDiscardsPendingNavigation() throws {
         let editor = NSTextView()
         var bindings = NavigationBindings.vim
@@ -47,6 +65,43 @@ struct OverlayNavigationTests {
             #expect(OverlayPanelController.match(for: event, screen: .applications,
                 firstResponder: editor, matcher: &matcher) == .command(command))
         }
+    }
+
+    @Test func escapeLeavesSearchBeforeClosingWhenAdditionalKeysExist() throws {
+        let editor = NSTextView()
+        var matcher = NavigationKeyMatcher(bindings: .vim)
+        let escape = try key("\u{1b}", code: kVK_Escape)
+        #expect(OverlayPanelController.match(for: escape, screen: .applications,
+            firstResponder: editor, hasAdditionalKeys: true, matcher: &matcher) == .leaveSearch)
+        #expect(OverlayPanelController.match(for: escape, screen: .applications,
+            firstResponder: nil, hasAdditionalKeys: true, matcher: &matcher) == .command(.escape))
+        #expect(OverlayPanelController.match(for: escape, screen: .applications,
+            firstResponder: editor, hasAdditionalKeys: false, matcher: &matcher) == .command(.escape))
+    }
+
+    @Test func markedTextKeepsEscapeInsideTheEditor() throws {
+        let editor = NSTextView()
+        editor.setMarkedText("a", selectedRange: NSRange(location: 1, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0))
+        var matcher = NavigationKeyMatcher(bindings: .vim)
+        #expect(OverlayPanelController.match(for: try key("\u{1b}", code: kVK_Escape),
+            screen: .applications, firstResponder: editor, hasAdditionalKeys: true,
+            matcher: &matcher) == .unhandled)
+    }
+
+    @Test func searchShortcutsWinInApplicationListAndResetSequences() throws {
+        var matcher = NavigationKeyMatcher(bindings: .vim)
+        #expect(matcher.process(KeyStroke(key: "g"), at: 0) == .consumed)
+        #expect(OverlayPanelController.match(for: try key("/", code: kVK_ANSI_Slash),
+            screen: .applications, firstResponder: nil, hasAdditionalKeys: true,
+            matcher: &matcher) == .startSearch)
+        #expect(matcher.process(KeyStroke(key: "g"), at: 0.1) == .consumed)
+        #expect(OverlayPanelController.match(for: try key("f", code: kVK_ANSI_F, modifiers: .command),
+            screen: .applications, firstResponder: nil, hasAdditionalKeys: true,
+            matcher: &matcher) == .startSearch)
+        #expect(OverlayPanelController.match(for: try key("/", code: kVK_ANSI_Slash),
+            screen: .windows(applicationID: 1), firstResponder: nil,
+            hasAdditionalKeys: true, matcher: &matcher) == .unhandled)
     }
 
     @Test func markedTextKeepsConfirmationAndDiscardsPendingNavigation() throws {

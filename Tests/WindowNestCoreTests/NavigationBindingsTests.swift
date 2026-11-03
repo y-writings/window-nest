@@ -2,6 +2,12 @@ import Foundation
 import Testing
 @testable import WindowNestCore
 
+@Test func additionalKeysIgnoreEmptyAssignmentBuckets() {
+    #expect(!NavigationBindings.standard.hasAdditionalKeys)
+    #expect(!NavigationBindings(assignments: [.left: []]).hasAdditionalKeys)
+    #expect(NavigationBindings.vim.hasAdditionalKeys)
+}
+
 private func apps(_ count: Int) -> [ApplicationItem] {
     (0..<count).map { ApplicationItem(id: Int32($0), name: "\($0)", windows: []) }
 }
