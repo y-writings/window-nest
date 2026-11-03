@@ -18,6 +18,10 @@ run = "make app"
 description = "Clean host Swift build products"
 run = "make clean"
 
+[tasks.uninstall]
+description = "Remove the locally built WindowNest.app (quit the app first; keeps settings and permissions)"
+run = "make uninstall"
+
 [tasks."docker:build"]
 description = "Build the Swift package in Linux (excludes macOS UI)"
 run = "docker compose run --build --rm dev swift build"

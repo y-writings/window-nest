@@ -29,7 +29,8 @@ brew trust --formula y-writings/window-nest/window-nest
 brew install window-nest
 ```
 
-URL 付きの `brew tap` は省略できません。`brew install` だけだと、`y-writings/homebrew-window-nest` という別リポジトリを探しにいきます。
+URL 付きの `brew tap` は省略できません。
+`brew install` だけだと、`y-writings/homebrew-window-nest` という別リポジトリを探しにいきます。
 tap したあとに `brew install y-writings/window-nest/window-nest` を実行しても、同じ Formula だけを信頼してインストールします。
 この場合、`--formula` を別に打たなくても信頼が記録されます。
 短い名前の `brew install window-nest` を使う前には、上の `brew trust --formula` が必要です。
@@ -62,7 +63,8 @@ Formula の署名は、`CODE_SIGN_IDENTITY` を設定しないときの `make ap
 `brew upgrade` で中身が変わると署名が変わり、許可済みでも権限が効かなくなることがあります。
 そのときは「権限設定」の `tccutil reset` 手順で、このバンドルを許可し直してください。
 
-新しい `weekly-*` タグを安定版にするには、`Formula/window-nest.rb` の `url` と `sha256` を、そのタグの GitHub アーカイブに更新します。
+新しい `weekly-*` タグを安定版にするには、`Formula/window-nest.rb` の `url` と `sha256` を、
+そのタグの GitHub アーカイブに更新します。
 
 ## ビルドと起動
 
@@ -78,7 +80,8 @@ mise run build
 mise run app
 ```
 
-`external macro implementation type 'SwiftUIMacros.StateMacro' could not be found` が表示される場合は、
+`external macro implementation type 'SwiftUIMacros.StateMacro' could not be found`
+が表示される場合は、
 この対応を含む最新版であることを確認してください。別のソースや依存パッケージで同じエラーが出る場合は、
 完全版 Xcode をインストールし、使用する Developer Directory を切り替えます。
 
@@ -98,17 +101,56 @@ mise run app
 open .build/WindowNest.app
 ```
 
-| コマンド         | 内容                                        |
-| ---------------- | ------------------------------------------- |
-| `mise run build` | 開発用ビルド（`make build`）                |
-| `mise run test`  | 自動テスト（`make test`）                   |
-| `mise run app`   | Release ビルドと `.app` 作成・署名（macOS） |
-| `mise run clean` | ホストのビルド生成物を削除（`make clean`）  |
+| コマンド             | 内容                                             |
+| -------------------- | ------------------------------------------------ |
+| `mise run build`     | 開発用ビルド（`make build`）                     |
+| `mise run test`      | 自動テスト（`make test`）                        |
+| `mise run app`       | Release ビルドと `.app` 作成・署名（macOS）      |
+| `mise run clean`     | ホストのビルド生成物を削除（`make clean`）       |
+| `mise run uninstall` | 手動ビルド版の `.app` を削除（`make uninstall`） |
 
 mise がない場合は、従来どおり `make build` / `make test` / `make app` を利用できます。
 タスク実行時のツール自動インストールは無効にしています。共通の lint ツールが必要な場合は、明示的に `mise install` を実行してください。
 
 初回起動後、メニューバーの重なった四角形アイコンから WindowNest を表示できます。
+
+### 手動ビルド版のアンインストール
+
+`make app` / `mise run app` で作成した `.build/WindowNest.app` は、次の手順で削除できます。
+
+1. メニューバーの **Quit WindowNest** からアプリを終了します。
+2. **保存設定と権限も消す場合だけ**、アプリを削除する前に次を実行します。設定や許可を残したい場合は、この手順を省略してください。
+
+   ```bash
+   # アクセシビリティ・画面収録の許可をリセット
+   tccutil reset Accessibility dev.ywritings.WindowNest
+   tccutil reset ScreenCapture dev.ywritings.WindowNest
+
+   # ショートカットなどの保存設定を削除
+   defaults delete dev.ywritings.WindowNest
+   ```
+
+   設定を保存していない場合、`defaults delete` は対象のドメインが存在しない旨を表示します。その場合は設定の削除は不要です。
+
+3. リポジトリのルートで次を実行します。
+
+   ```bash
+   mise run uninstall
+   ```
+
+   mise がない場合は `make uninstall` を実行してください。
+   このコマンドは `.build/WindowNest.app` だけを削除し、保存設定・権限・その他のビルド生成物は残します。
+
+`/Applications` などへ自分でコピーした `WindowNest.app` があれば、そのコピーも削除してください。
+ログイン項目に手動登録していた場合は、その登録も解除します。
+
+ビルド生成物をまとめて削除する場合は、手順3の代わりにリポジトリのルートで次を実行します。
+
+```bash
+rm -rf .build
+```
+
+`mise run clean` / `make clean` だけでは、保存設定や macOS の権限は削除されません。
 
 ## Docker での開発
 
