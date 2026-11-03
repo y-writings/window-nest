@@ -7,12 +7,15 @@ class WindowNest < Formula
   head "https://github.com/y-writings/window-nest.git", branch: "main"
 
   # Snapshots are weekly CalVer tags. This repository has no GitHub Releases.
+  # Nightlies are Formula/window-nest-nightly.rb and nightly-* tags.
   livecheck do
     url :stable
     regex(/^weekly[._-]v?(\d{4}\.\d{2}\.\d{2})$/i)
   end
 
   depends_on macos: :sonoma
+
+  conflicts_with "window-nest-nightly", because: "both install WindowNest.app and the window-nest command"
 
   def install
     unless which("swift")
@@ -72,6 +75,9 @@ class WindowNest < Formula
       The bundle is:
 
         #{opt_prefix}/WindowNest.app
+
+      Nightly installs use the window-nest-nightly formula and cannot be
+      installed beside this one.
 
       Grant Accessibility and Screen Recording to that bundle, then relaunch.
       This formula ad-hoc signs the app. After `brew upgrade`, macOS may
