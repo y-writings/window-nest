@@ -36,11 +36,54 @@ tap したあとに `brew install y-writings/window-nest/window-nest` を実行�
 短い名前の `brew install window-nest` を使う前には、上の `brew trust --formula` が必要です。
 
 安定版がビルドするのはタグ `weekly-2026.10.26` です。
-`main` の最新コミットをビルドする場合は、同じ信頼のあとに次を実行します。
+`main` の最新コミットを、公開済みナイトリーではなくその場でビルドする場合は、同じ信頼のあとに次を実行します。
 
 ```bash
 brew install --HEAD y-writings/window-nest/window-nest
 ```
+
+### ナイトリー
+
+ナイトリーは別の Formula `window-nest-nightly` です。
+安定版と同じく、配布バイナリはなく、macOS 上でソースから `WindowNest.app` をビルドします。
+指しているのは `nightly-YYYY.MM.DD` タグであり、`main` の先端そのものではありません。
+`window-nest` とは同時にインストールできません。入れ替えるときは、入っている方を `brew uninstall` してから入れます。
+
+信頼は Formula ごとです。安定版を信頼していても、ナイトリーには別の `brew trust --formula` が必要です。
+Homebrew 6.0 以降の扱いは安定版と同じです。
+
+```bash
+brew tap y-writings/window-nest https://github.com/y-writings/window-nest
+brew trust --formula y-writings/window-nest/window-nest-nightly
+brew install window-nest-nightly
+```
+
+`brew install y-writings/window-nest/window-nest-nightly` でも、同じ Formula だけを信頼してインストールします。
+更新は `brew upgrade window-nest-nightly` です。
+起動コマンドは安定版と同じ `window-nest` です。許可するバンドルは次です。
+
+```text
+$(brew --prefix)/opt/window-nest-nightly/WindowNest.app
+```
+
+署名は安定版と同じアドホック署名です。
+`brew upgrade` のあと権限が効かなくなったときは、「権限設定」の `tccutil reset` を、このバンドルに対してやり直します。
+
+公開は GitHub Actions の Nightly ワークフローです。
+毎日 15:00 UTC（日本時間 0:00）に起動し、前回の `nightly-YYYY.MM.DD` タグから
+`Sources/`、`Package.swift`、`Package.resolved`、`Resources/` に変更があるときだけ、
+macOS 上でテストとビルドをしてタグを切り、この Formula をそのタグへ更新します。
+テスト、ドキュメント、Formula、Makefile、CI だけの変更では公開しません。
+`nightly-*` タグがまだ無いときは、その時点の `main` を公開します。
+マージ直後の Formula は、この変更の直前の `main` を指します。初回の実行で `nightly-*` タグに切り替わります。
+
+Actions タブから Nightly を手動実行できます。
+入力 `force` の既定は true で、アプリの変更がなくてもビルドと公開処理をします。
+そのコミットが既に最新の `nightly-YYYY.MM.DD` タグなら、新しいタグは作りません。
+`force` を false にすると、定期実行と同じく変更があるときだけです。
+同じ日に別のコミットを出すときは、`calver_date` に `YYYY.MM.DD` または `YYYY.MM.DD-suffix` を指定します。
+`main` はプルリクエストでしか更新できないため、Formula のピンは `automation/update-nightly-formula` のプルリクエストになります。
+週次 changelog と同じ GitHub App で自動マージします。新しい secret は使いません。
 
 起動は次のどちらかです。`window-nest` はメニューバーアプリを開いてすぐに戻ります。
 
@@ -50,7 +93,8 @@ open "$(brew --prefix)/opt/window-nest/WindowNest.app"
 ```
 
 初回は「権限設定」のとおり、アクセシビリティと画面収録を許可してください。
-許可するアプリは、開発ビルドの `.build/WindowNest.app` ではなく、Homebrew が置いた次のバンドルです。
+許可するアプリは、開発ビルドの `.build/WindowNest.app` ではなく、Homebrew が置いたバンドルです。
+安定版は次のパスです。ナイトリーは `opt/window-nest` の代わりに `opt/window-nest-nightly` です。
 
 ```text
 $(brew --prefix)/opt/window-nest/WindowNest.app
@@ -65,6 +109,7 @@ Formula の署名は、`CODE_SIGN_IDENTITY` を設定しないときの `make ap
 
 新しい `weekly-*` タグを安定版にするには、`Formula/window-nest.rb` の `url` と `sha256` を、
 そのタグの GitHub アーカイブに更新します。
+`Formula/window-nest-nightly.rb` は Nightly ワークフローが更新します。
 
 ## ビルドと起動
 

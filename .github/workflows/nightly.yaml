@@ -1,0 +1,136 @@
+name: Nightly
+on:
+  schedule:
+    # 15:00 UTC is 00:00 in Asia/Tokyo. The tag date is that UTC date,
+    # which is the Japan calendar day that just ended.
+    - cron: "0 15 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Build and publish even when application sources are unchanged.
+        required: false
+        type: boolean
+        default: true
+      calver_date:
+        description: Optional YYYY.MM.DD or YYYY.MM.DD-suffix override. Defaults to the current UTC date.
+        required: false
+        type: string
+# GITHUB_TOKEN only reads the repo. Tags and the formula pull request use the
+# same GitHub App credentials as the weekly changelog workflow:
+#   vars.PR_CREATOR_APP_ID / secrets.PR_CREATOR_APP_PRIVATE_KEY
+#     contents: write, pull-requests: write
+#   vars.PR_APPROVER_APP_ID / secrets.PR_APPROVER_APP_PRIVATE_KEY
+#     pull-requests: write
+# No new secrets. main is pull-request only, so the formula pin is a PR.
+permissions:
+  contents: read
+concurrency:
+  group: nightly-window-nest
+  cancel-in-progress: false
+jobs:
+  decide:
+    name: Detect application changes
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.decide.outputs.publish }}
+      sha: ${{ steps.decide.outputs.sha }}
+      tag_date: ${{ steps.decide.outputs.tag_date }}
+      previous_tag: ${{ steps.decide.outputs.previous_tag }}
+      reason: ${{ steps.decide.outputs.reason }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Decide whether application sources changed
+        id: decide
+        env:
+          # github.event.inputs values are strings. Compare with 'true' so the
+          # string "false" does not count as enabled.
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force == 'true' && 'true' || 'false' }}
+          CALVER_DATE: ${{ github.event.inputs.calver_date || '' }}
+        run: bash .github/scripts/nightly-decide.sh
+  build:
+    name: Test and build WindowNest.app
+    needs: decide
+    if: needs.decide.outputs.publish == 'true'
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Check out the commit to publish
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.decide.outputs.sha }}
+      - name: Run tests
+        run: swift test
+      - name: Build app
+        run: make app
+  publish:
+    name: Tag nightly and update formula
+    needs: [decide, build]
+    if: needs.decide.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create pull request creator GitHub App token
+        id: pr-creator-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.PR_CREATOR_APP_ID }}
+          private-key: ${{ secrets.PR_CREATOR_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Check out main for the formula pin
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          token: ${{ steps.pr-creator-token.outputs.token }}
+      - name: Create the nightly tag and pin the formula
+        id: publish
+        env:
+          GH_TOKEN: ${{ steps.pr-creator-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          TARGET_SHA: ${{ needs.decide.outputs.sha }}
+          TAG_DATE: ${{ needs.decide.outputs.tag_date }}
+        run: bash .github/scripts/nightly-publish.sh
+      - name: Create or update the formula pull request
+        id: nightly-pull-request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ steps.pr-creator-token.outputs.token }}
+          add-paths: |
+            Formula/window-nest-nightly.rb
+          author: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
+          committer: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
+          branch: automation/update-nightly-formula
+          base: main
+          commit-message: "ci(nightly): bump window-nest-nightly to ${{ steps.publish.outputs.tag }}"
+          delete-branch: true
+          title: "ci(nightly): bump window-nest-nightly to ${{ steps.publish.outputs.tag }}"
+          body: |
+            ## Summary
+            - pin `Formula/window-nest-nightly.rb` to `${{ steps.publish.outputs.tag }}`
+            - that tag points at `${{ needs.decide.outputs.sha }}`, the commit this workflow built
+            - auto-merge is enabled after automated validation
+      - name: Create approver GitHub App token
+        id: approver-token
+        if: ${{ steps.nightly-pull-request.outputs.pull-request-number != '' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.PR_APPROVER_APP_ID }}
+          private-key: ${{ secrets.PR_APPROVER_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+      - name: Verify, approve, and enable auto-merge for the formula pull request
+        if: ${{ steps.nightly-pull-request.outputs.pull-request-number != '' }}
+        uses: y-writings/pr-seal-action@b75d704586ce38c6f097eac85f41d687c077ff42 # v0.1.1
+        with:
+          repository: ${{ github.repository }}
+          pull-request-number: ${{ steps.nightly-pull-request.outputs.pull-request-number }}
+          expected-author: y-writings-pr-creator-bot
+          allowed-paths: |
+            Formula/window-nest-nightly.rb
+          approve-token: ${{ steps.approver-token.outputs.token }}
+          merge-token: ${{ steps.pr-creator-token.outputs.token }}
+          merge-method: squash
+          approve-body: Automated approval for the window-nest-nightly formula pin.
