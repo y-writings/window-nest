@@ -6,7 +6,10 @@
 # Tests, docs, Formula, Makefile, and CI do not count. The formula invokes
 # `swift build` itself, so a Makefile-only edit does not change the nightly.
 # When no nightly-* tag exists yet, publish current main once so the formula
-# has a snapshot to track.
+# has a snapshot to track. If that tag exists but Formula/window-nest-nightly.rb
+# is not pinned to its archive, publish the tagged commit so a failed formula
+# update is retried. Docs-only changes are skipped only after the formula
+# already points at that tag.
 set -euo pipefail
 
 export LC_ALL=C
@@ -63,8 +66,11 @@ else
 fi
 
 sha="$(git rev-parse --verify "${TARGET_SHA}^{commit}")"
+repo_root="$(git rev-parse --show-toplevel)"
+formula="${repo_root}/Formula/window-nest-nightly.rb"
 
 latest_tag=""
+latest_sha=""
 while IFS= read -r tag; do
   [[ "${tag}" =~ ^nightly-[0-9]{4}\.[0-9]{2}\.[0-9]{2}$ ]] || continue
   if [[ -z "${latest_tag}" || "${tag}" > "${latest_tag}" ]]; then
@@ -88,12 +94,26 @@ else
   fi
 fi
 
+# The publisher writes url ".../archive/refs/tags/${tag}.tar.gz" inside the
+# nightly-pin block. Anything else means that tag was not published to Homebrew.
+formula_pinned=false
+if [[ -n "${latest_tag}" && -f "${formula}" ]]; then
+  pin_url="$(sed -n '/# nightly-pin: begin/,/# nightly-pin: end/s/^[[:space:]]*url "\([^"]*\)".*/\1/p' "${formula}")"
+  if [[ "${pin_url}" == *"archive/refs/tags/${latest_tag}.tar.gz" ]]; then
+    formula_pinned=true
+  fi
+fi
+
 publish=false
 if [[ "${FORCE}" == "true" ]]; then
   publish=true
   reason="workflow_dispatch force=true; ${reason}"
 elif [[ "${app_changed}" == true ]]; then
   publish=true
+elif [[ -n "${latest_tag}" && "${formula_pinned}" != true ]]; then
+  publish=true
+  reason="formula is not pinned to ${latest_tag}; ${reason}"
+  sha="${latest_sha}"
 fi
 
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
@@ -103,6 +123,7 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     echo "- publish: \`${publish}\`"
     echo "- commit: \`${sha}\`"
     echo "- previous tag: \`${latest_tag:-none}\`"
+    echo "- formula pinned: \`${formula_pinned}\`"
     echo "- tag date: \`${tag_date}\`"
     echo "- reason: ${reason}"
     if [[ -n "${changed_files}" ]]; then

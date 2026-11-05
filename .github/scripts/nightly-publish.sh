@@ -7,7 +7,8 @@
 # cannot do because it only resolves a branch tip. A canonical tag is not
 # created when that commit is already the latest canonical nightly tag.
 # Creating the tag and then failing the download is safe: the next run sees
-# the existing tag and continues with the formula pin.
+# the tag and, when the formula is not pinned to it, publishes that commit
+# again so this script can finish the pin.
 set -euo pipefail
 
 export LC_ALL=C
