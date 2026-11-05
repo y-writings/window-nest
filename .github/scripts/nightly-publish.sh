@@ -145,7 +145,9 @@ if ! gzip -t "${tmp}"; then
   echo "downloaded archive is not gzip: ${url}" >&2
   exit 1
 fi
-if ! tar -tzf "${tmp}" | grep -q '/Package.swift$'; then
+# `grep -q` exits at the first match and SIGPIPEs tar. With pipefail that
+# status is 141, so a valid archive is rejected after the tag exists.
+if ! tar -tzf "${tmp}" | grep '/Package.swift$' >/dev/null; then
   echo "archive is missing Package.swift: ${url}" >&2
   exit 1
 fi
