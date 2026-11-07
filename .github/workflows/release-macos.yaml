@@ -1,0 +1,249 @@
+name: Release macOS app
+on:
+  create:
+  workflow_call:
+    inputs:
+      tag:
+        description: Existing nightly tag selected by the Nightly workflow
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing weekly-YYYY.MM.DD or nightly-YYYY.MM.DD[-suffix] tag to publish or recover
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release-macos
+  cancel-in-progress: false
+jobs:
+  release:
+    if: >-
+      inputs.tag != '' || (github.event.ref_type == 'tag' && startsWith(github.event.ref, 'weekly-'))
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.event.ref }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Check out current release tooling
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate release tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_TAG" =~ ^weekly-[0-9]{4}\.[0-9]{2}\.[0-9]{2}$ ]]; then
+            cask=window-nest
+            channel=weekly
+          elif [[ "$RELEASE_TAG" =~ ^nightly-[0-9]{4}\.[0-9]{2}\.[0-9]{2}(-[A-Za-z0-9]{1,32})?$ ]]; then
+            cask=window-nest-nightly
+            channel=nightly
+          else
+            echo 'Expected a weekly-YYYY.MM.DD or nightly-YYYY.MM.DD[-suffix] tag.' >&2
+            exit 1
+          fi
+          version=${RELEASE_TAG#*-}
+          python3 -c 'import datetime, sys; datetime.datetime.strptime(sys.argv[1], "%Y.%m.%d")' "${version%%-*}"
+          git merge-base --is-ancestor "$RELEASE_TAG" HEAD
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "app_version=${version%%-*}" >> "$GITHUB_OUTPUT"
+          echo "cask=$cask" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse "${RELEASE_TAG}^{commit}")" >> "$GITHUB_OUTPUT"
+      - name: Check for an existing release
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if release=$(gh release view "$RELEASE_TAG" --json assets,isDraft); then
+            echo 'exists=true' >> "$GITHUB_OUTPUT"
+            echo "asset_exists=$(jq -r 'any(.assets[]; .name == "WindowNest.zip")' <<< "$release")" >> "$GITHUB_OUTPUT"
+            echo "draft=$(jq -r '.isDraft' <<< "$release")" >> "$GITHUB_OUTPUT"
+          else
+            echo 'exists=false' >> "$GITHUB_OUTPUT"
+            echo 'asset_exists=false' >> "$GITHUB_OUTPUT"
+            echo 'draft=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Check signing credentials
+        if: steps.release.outputs.asset_exists != 'true'
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in MACOS_CERTIFICATE_BASE64 MACOS_CERTIFICATE_PASSWORD MACOS_SIGN_IDENTITY APPLE_ID APPLE_TEAM_ID APPLE_APP_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing required release secret: $name" >&2
+              exit 1
+            fi
+          done
+      - name: Check out the tagged app source
+        if: steps.release.outputs.asset_exists != 'true'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ steps.tag.outputs.commit }}
+          path: .build/release-source
+          persist-credentials: false
+      - name: Test and build a universal app
+        if: steps.release.outputs.asset_exists != 'true'
+        env:
+          APP_VERSION: ${{ steps.tag.outputs.app_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift test --package-path .build/release-source
+          swift build --package-path .build/release-source -c release --arch arm64 --arch x86_64 --product WindowNest
+          binary_dir=$(swift build --package-path .build/release-source -c release --arch arm64 --arch x86_64 --show-bin-path)
+          app=.build/macos-release/WindowNest.app
+          mkdir -p "$app/Contents/MacOS"
+          cp "$binary_dir/WindowNest" "$app/Contents/MacOS/WindowNest"
+          cp .build/release-source/Resources/Info.plist "$app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_VERSION" "$app/Contents/Info.plist"
+          lipo "$app/Contents/MacOS/WindowNest" -verify_arch arm64
+          lipo "$app/Contents/MacOS/WindowNest" -verify_arch x86_64
+      - name: Sign with Developer ID
+        if: steps.release.outputs.asset_exists != 'true'
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/window-nest-signing.keychain-db"
+          certificate="$RUNNER_TEMP/window-nest-signing.p12"
+          trap 'security delete-keychain "$keychain"; rm -f "$certificate"' EXIT
+          password=$(openssl rand -hex 32)
+          echo "::add-mask::$password"
+          printf '%s' "$MACOS_CERTIFICATE_BASE64" | /usr/bin/base64 -D > "$certificate"
+          security create-keychain -p "$password" "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign >/dev/null
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
+          codesign --force --options runtime --timestamp --keychain "$keychain" --sign "$MACOS_SIGN_IDENTITY" .build/macos-release/WindowNest.app
+          codesign --verify --strict .build/macos-release/WindowNest.app
+      - name: Notarize and staple the app
+        if: steps.release.outputs.asset_exists != 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          app=.build/macos-release/WindowNest.app
+          archive=.build/macos-release/WindowNest.zip
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"
+          xcrun notarytool submit "$archive" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait --output-format json > "$RUNNER_TEMP/notarization.json"
+          if ! jq -e '.status == "Accepted"' "$RUNNER_TEMP/notarization.json" >/dev/null; then
+            echo 'Apple did not accept the app for notarization.' >&2
+            exit 1
+          fi
+          xcrun stapler staple "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute "$app"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"
+      - name: Publish the immutable archive
+        env:
+          RELEASE_EXISTS: ${{ steps.release.outputs.exists }}
+          ASSET_EXISTS: ${{ steps.release.outputs.asset_exists }}
+          IS_DRAFT: ${{ steps.release.outputs.draft }}
+          CHANNEL: ${{ steps.tag.outputs.channel }}
+          RELEASE_VERSION: ${{ steps.tag.outputs.version }}
+        run: bash scripts/publish-macos-release.sh
+      - name: Generate Cask from the published archive
+        env:
+          CASK_FILE: Casks/${{ steps.tag.outputs.cask }}.rb
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .build/published Casks
+          gh release download "$RELEASE_TAG" --pattern WindowNest.zip --dir .build/published
+          python3 scripts/generate-cask.py "$RELEASE_TAG" .build/published/WindowNest.zip > "$CASK_FILE"
+          ruby -c "$CASK_FILE"
+      - name: Create pull request creator token
+        id: pr-creator-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.PR_CREATOR_APP_ID }}
+          private-key: ${{ secrets.PR_CREATOR_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Open Cask update pull request
+        id: cask-pull-request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ steps.pr-creator-token.outputs.token }}
+          add-paths: Casks/${{ steps.tag.outputs.cask }}.rb
+          branch: automation/update-${{ steps.tag.outputs.cask }}-cask
+          base: main
+          delete-branch: true
+          commit-message: "build: update ${{ steps.tag.outputs.cask }} Cask"
+          title: "build: update ${{ steps.tag.outputs.cask }} Cask to ${{ steps.tag.outputs.version }}"
+          body: |
+            # WindowNest Cask update
+
+            ## Motivation
+
+            公開済みの macOS アプリを Homebrew から Applications にインストールできるようにする。
+
+            Install the published macOS app into Applications through Homebrew.
+
+            ## What Changed
+
+            ${{ steps.tag.outputs.cask }} を ${{ steps.tag.outputs.version }} と公開 ZIP の SHA256 に更新する。
+
+            Update ${{ steps.tag.outputs.cask }} version and SHA256 from the published ZIP.
+
+            ## Verification
+
+            - 公開済み ZIP から SHA256 を計算し、Cask の Ruby 構文を確認。
+            - 新規配布時は universal ビルド、Developer ID 署名、公証を検証。
+
+            ## PR diff statistics
+
+            <!-- pr-diff-statistics:start -->
+
+            _Statistics are added after the pull request is opened._
+
+            <!-- pr-diff-statistics:end -->
+
+            ---
+
+            <!-- AUTO-GENERATED METADATA: DO NOT EDIT BELOW THIS LINE -->
+      - name: Create approver GitHub App token
+        id: approver-token
+        if: steps.cask-pull-request.outputs.pull-request-number != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.PR_APPROVER_APP_ID }}
+          private-key: ${{ secrets.PR_APPROVER_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+      - name: Verify, approve, and enable auto-merge for the Cask pull request
+        if: steps.cask-pull-request.outputs.pull-request-number != ''
+        uses: y-writings/pr-seal-action@b75d704586ce38c6f097eac85f41d687c077ff42 # v0.1.1
+        with:
+          repository: ${{ github.repository }}
+          pull-request-number: ${{ steps.cask-pull-request.outputs.pull-request-number }}
+          expected-author: y-writings-pr-creator-bot
+          allowed-paths: Casks/${{ steps.tag.outputs.cask }}.rb
+          approve-token: ${{ steps.approver-token.outputs.token }}
+          merge-token: ${{ steps.pr-creator-token.outputs.token }}
+          merge-method: squash
+          approve-body: Automated approval for the published WindowNest Cask.
