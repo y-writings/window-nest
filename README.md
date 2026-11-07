@@ -5,7 +5,7 @@ WindowNest は、起動中のアプリとそのウインドウをキーボード
 ## 動作環境
 
 - macOS 14 Sonoma 以降（`SCScreenshotManager` を使用するため）
-- Swift 6.0 以降 / Xcode 16 以降（完全版 Xcode を推奨）
+- ソースビルド時は Swift 6.0 以降 / Xcode 16 以降（完全版 Xcode を推奨）
 - Accessibility（アクセシビリティ）権限
 - Screen & System Audio Recording（画面収録）権限（サムネイル表示用）
 
@@ -13,103 +13,142 @@ WindowNest は、起動中のアプリとそのウインドウをキーボード
 
 ## Homebrew
 
-このリポジトリを Homebrew の tap として追加し、Formula からインストールできます。
+このリポジトリを Homebrew の tap として追加し、Cask からインストールできます。
 リポジトリ名が `homebrew-` で始まらないため、tap するときに URL を指定します。
-ビルド済みの `.app` は配布していないので、Formula は macOS 上でソースから `WindowNest.app` をビルドします。
-必要な環境は上記と同じです（macOS 14 以降、Swift 6.0 以降）。Homebrew 6.0 以降が必要です。
+Cask は Developer ID で署名・Apple で公証した universal アプリ（Apple Silicon / Intel）を
+既定で `/Applications/WindowNest.app` に配置します。ソースビルドは不要です。
+Homebrew 6.0 以降が必要です。
 
-Homebrew 6.0 以降、公式以外の tap にある Formula は、信頼するまで読み込まれません。
-信頼していない Formula はインストールできず、あとから `brew upgrade` もできません。
-信頼対象は tap 全体ではなく、この Formula だけにしてください。
-`brew trust` の `--formula` が、その指定をするフラグです。
+Cask は、対象タグの **Release macOS app** が成功し、生成された Cask 更新 PR が
+マージされたあとに利用できます。初回公開に必要な設定は「署名済み Cask の公開」を参照してください。
+公開前は下記のソースビルド用 Formula を利用できます。
+
+公式以外の tap は信頼が必要です。tap 全体ではなく、インストールする Cask だけを信頼します。
 
 ```bash
 brew tap y-writings/window-nest https://github.com/y-writings/window-nest
-brew trust --formula y-writings/window-nest/window-nest
-brew install window-nest
+brew trust --cask y-writings/window-nest/window-nest
+brew install --cask window-nest
 ```
 
-URL 付きの `brew tap` は省略できません。
-`brew install` だけだと、`y-writings/homebrew-window-nest` という別リポジトリを探しにいきます。
-tap したあとに `brew install y-writings/window-nest/window-nest` を実行しても、同じ Formula だけを信頼してインストールします。
-この場合、`--formula` を別に打たなくても信頼が記録されます。
-短い名前の `brew install window-nest` を使う前には、上の `brew trust --formula` が必要です。
-
-安定版がビルドするのはタグ `weekly-2026.10.26` です。
-`main` の最新コミットを、公開済みナイトリーではなくその場でビルドする場合は、同じ信頼のあとに次を実行します。
-
-```bash
-brew install --HEAD y-writings/window-nest/window-nest
-```
+URL 付きの `brew tap` は省略できません。省略すると `y-writings/homebrew-window-nest` を探しにいきます。
+**`--cask` を省略すると、同名のソースビルド用 Formula が選ばれます。**
+更新は `brew upgrade --cask window-nest` です。
 
 ### ナイトリー
 
-ナイトリーは別の Formula `window-nest-nightly` です。
-安定版と同じく、配布バイナリはなく、macOS 上でソースから `WindowNest.app` をビルドします。
-指しているのは `nightly-YYYY.MM.DD` タグであり、`main` の先端そのものではありません。
-`window-nest` とは同時にインストールできません。入れ替えるときは、入っている方を `brew uninstall` してから入れます。
+ナイトリーの Cask は `window-nest-nightly` です。
+`nightly-YYYY.MM.DD` または `nightly-YYYY.MM.DD-suffix` タグの署名・公証済みアプリを
+`/Applications/WindowNest.app` に配置します。`main` の先端そのものではありません。
+信頼は Cask ごとに必要です。
 
-信頼は Formula ごとです。安定版を信頼していても、ナイトリーには別の `brew trust --formula` が必要です。
-Homebrew 6.0 以降の扱いは安定版と同じです。
+```bash
+brew tap y-writings/window-nest https://github.com/y-writings/window-nest
+brew trust --cask y-writings/window-nest/window-nest-nightly
+brew install --cask window-nest-nightly
+```
+
+更新は `brew upgrade --cask window-nest-nightly` です。
+安定版とナイトリーは同じアプリと `window-nest` コマンドを配置するため、同時にはインストールできません。
+切り替えるときはアプリを終了し、入っている方を `brew uninstall --cask` してから入れます。
+
+### Formula 版から Cask 版への移行
+
+以前の `brew install window-nest-nightly` は Formula 版です。
+`brew upgrade` だけでは Cask 版へ切り替わらず、`/Applications` にも配置されません。
+先に Cask が公開済みであることを確認します。
+
+```bash
+brew update
+brew info --cask y-writings/window-nest/window-nest-nightly
+```
+
+Cask の情報が表示されたら、メニューバーの **Quit WindowNest** から終了し、次を実行します。
+安定版から移行する場合は、コマンドの `window-nest-nightly` を `window-nest` に置き換えます。
+
+```bash
+brew uninstall --formula window-nest-nightly
+brew trust --cask y-writings/window-nest/window-nest-nightly
+brew install --cask window-nest-nightly
+```
+
+通常のアンインストールでは保存設定を削除しません。移行後は `/Applications/WindowNest.app` に
+アクセシビリティと画面収録を許可し直してください。
+
+### 起動と権限
+
+安定版・ナイトリーとも起動コマンドは同じです。`window-nest` はメニューバーアプリを開いてすぐに戻ります。
+
+```bash
+window-nest
+open /Applications/WindowNest.app
+```
+
+初回は「権限設定」のとおり、アクセシビリティと画面収録を許可してください。
+システム設定の一覧に無い場合は、**＋** から `/Applications/WindowNest.app` を追加します。
+`--appdir` で配置先を指定した場合は、その場所のアプリを開き、許可してください。
+
+### ソースビルド用 Formula
+
+署名済み Cask と別に、Swift 6.0 / Xcode 16 以降でソースからビルドする Formula も残しています。
+安定版は `weekly-2026.10.26`、ナイトリーは Nightly が更新するタグをビルドします。
 
 ```bash
 brew tap y-writings/window-nest https://github.com/y-writings/window-nest
 brew trust --formula y-writings/window-nest/window-nest-nightly
-brew install window-nest-nightly
+brew install --formula window-nest-nightly
 ```
 
-`brew install y-writings/window-nest/window-nest-nightly` でも、同じ Formula だけを信頼してインストールします。
-更新は `brew upgrade window-nest-nightly` です。
-起動コマンドは安定版と同じ `window-nest` です。許可するバンドルは次です。
+安定版は `window-nest-nightly` を `window-nest` に置き換えます。
+`main` をその場でビルドする場合は `brew install --HEAD y-writings/window-nest/window-nest` です。
+Formula 同士、または Cask と同時にはインストールせず、先にインストール済みの方をアンインストールしてください。
+Formula の起動コマンドも `window-nest` ですが、アプリの場所は次です。`/Applications` には配置しません。
 
 ```text
 $(brew --prefix)/opt/window-nest-nightly/WindowNest.app
 ```
 
-署名は安定版と同じアドホック署名です。
-`brew upgrade` のあと権限が効かなくなったときは、「権限設定」の `tccutil reset` を、このバンドルに対してやり直します。
+安定版は `opt/window-nest` です。権限を追加するときは `⌘⇧G` でこの場所を入力できます。
+Formula はアドホック署名のため、`brew upgrade --formula` のあと権限が効かなくなった場合は、
+「権限設定」の `tccutil reset` 手順で、このバンドルを許可し直してください。
 
-公開は GitHub Actions の Nightly ワークフローです。
-毎日 15:00 UTC（日本時間 0:00）に起動し、前回の `nightly-YYYY.MM.DD` タグから
-`Sources/`、`Package.swift`、`Package.resolved`、`Resources/` に変更があるときだけ、
-macOS 上でテストとビルドをしてタグを切り、この Formula をそのタグへ更新します。
-テスト、ドキュメント、Formula、Makefile、CI だけの変更では公開しません。
-`nightly-*` タグがまだ無いときは、その時点の `main` を公開します。
-マージ直後の Formula は、この変更の直前の `main` を指します。初回の実行で `nightly-*` タグに切り替わります。
+### 署名済み Cask の公開
 
-Actions タブから Nightly を手動実行できます。
-入力 `force` の既定は true で、アプリの変更がなくてもビルドと公開処理をします。
-そのコミットが既に最新の `nightly-YYYY.MM.DD` タグなら、新しいタグは作りません。
-`force` を false にすると、定期実行と同じく変更があるときだけです。
-同じ日に別のコミットを出すときは、`calver_date` に `YYYY.MM.DD` または `YYYY.MM.DD-suffix` を指定します。
-`main` はプルリクエストでしか更新できないため、Formula のピンは `automation/update-nightly-formula` のプルリクエストになります。
-週次 changelog と同じ GitHub App で自動マージします。新しい secret は使いません。
+配布を有効にするには、リポジトリの Actions Secrets に次を登録します。
 
-起動は次のどちらかです。`window-nest` はメニューバーアプリを開いてすぐに戻ります。
+- `MACOS_CERTIFICATE_BASE64`: Developer ID Application 証明書と秘密鍵を含む
+  `.p12` の Base64
+- `MACOS_CERTIFICATE_PASSWORD`: `.p12` のパスワード
+- `MACOS_SIGN_IDENTITY`: Developer ID Application の署名 ID
+- `APPLE_ID`: 公証に使う Apple ID
+- `APPLE_TEAM_ID`: Apple Developer の Team ID
+- `APPLE_APP_PASSWORD`: 公証用のアプリ用パスワード
 
-```bash
-window-nest
-open "$(brew --prefix)/opt/window-nest/WindowNest.app"
-```
+Cask 更新 PR は、既存の PR Creator / Approver GitHub App の設定を使用します。
+**Release macOS app** を手動実行し、既存の `weekly-YYYY.MM.DD` または
+`nightly-YYYY.MM.DD[-suffix]` タグを指定すると、そのコミットをテスト・universal ビルドし、
+Developer ID 署名・公証後の ZIP を GitHub Release に公開します。
+nightly は pre-release とし、安定版の Latest を置き換えません。
 
-初回は「権限設定」のとおり、アクセシビリティと画面収録を許可してください。
-許可するアプリは、開発ビルドの `.build/WindowNest.app` ではなく、Homebrew が置いたバンドルです。
-安定版は次のパスです。ナイトリーは `opt/window-nest` の代わりに `opt/window-nest-nightly` です。
+公開 ZIP から SHA256 を計算し、`Casks/window-nest.rb` または
+`Casks/window-nest-nightly.rb` の更新 PR を作成し、自動マージを有効にします。
+PR のブランチはチャネルごとに分けます。
+再実行では既存 ZIP を再利用し、公開済みアーカイブは上書きしません。
+公開途中で失敗した場合も、同じタグで **Release macOS app** を再実行できます。
 
-```text
-$(brew --prefix)/opt/window-nest/WindowNest.app
-```
+Nightly は毎日 15:00 UTC（日本時間 0:00）に、前回のタグから `Sources/`、`Package.swift`、
+`Package.resolved`、`Resources/` に変更があるときだけテスト・ビルド・タグ作成・Formula 更新を実行し、
+続けて同じタグを **Release macOS app** に渡します。
+初回はアプリの変更がないとスキップするため、設定後に既存タグ（例: `nightly-2026.11.05`）で
+**Release macOS app** を手動実行してください。
 
-システム設定の一覧に無い場合は、**＋** からこのパスを追加します。
-`⌘⇧G` で場所を入力できます。
-
-Formula の署名は、`CODE_SIGN_IDENTITY` を設定しないときの `make app` と同じアドホック署名です。
-`brew upgrade` で中身が変わると署名が変わり、許可済みでも権限が効かなくなることがあります。
-そのときは「権限設定」の `tccutil reset` 手順で、このバンドルを許可し直してください。
+Nightly の手動実行は `force` が既定 true で、同じコミットのタグがあれば再利用して公開処理を呼びます。
+`force=false` は定期実行と同じ変更判定です。同日に別のコミットを出す場合は、
+`calver_date` に `YYYY.MM.DD-suffix` を指定します。
+weekly タグの作成は **Release macOS app** を自動起動します。
 
 新しい `weekly-*` タグを安定版にするには、`Formula/window-nest.rb` の `url` と `sha256` を、
-そのタグの GitHub アーカイブに更新します。
-`Formula/window-nest-nightly.rb` は Nightly ワークフローが更新します。
+そのタグの GitHub アーカイブに更新します。これはソースビルド用 Formula のみの操作です。
 
 ## ビルドと起動
 

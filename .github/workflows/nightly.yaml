@@ -72,6 +72,8 @@ jobs:
     needs: [decide, build]
     if: needs.decide.outputs.publish == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.publish.outputs.tag }}
     steps:
       - name: Create pull request creator GitHub App token
         id: pr-creator-token
@@ -134,3 +136,12 @@ jobs:
           merge-token: ${{ steps.pr-creator-token.outputs.token }}
           merge-method: squash
           approve-body: Automated approval for the window-nest-nightly formula pin.
+  release:
+    name: Publish nightly app and Cask
+    needs: publish
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-macos.yaml
+    with:
+      tag: ${{ needs.publish.outputs.tag }}
+    secrets: inherit
