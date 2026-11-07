@@ -39,4 +39,26 @@ func olderReloadCannotReplaceNewerSnapshot() async throws {
     #expect(!model.loading)
     #expect(system.runningApplications[pid] === app)
 }
+
+@Test(.timeLimit(.minutes(1))) @MainActor
+func destructiveOperationRetreatsThenRestoresTheSameOverlaySession() async throws {
+    let app = NSRunningApplication.current
+    let pid = app.processIdentifier
+    let item = ApplicationItem(id: pid, name: "Current", windows: [])
+    let snapshot = MacWindowSystem.Snapshot(applications: [item], icons: [:], permission: .ready,
+                                            runningApplications: [pid: app])
+    let model = OverlayModel(system: MacWindowSystem()) { _ in snapshot }
+    model.state = BrowserState(applications: [item])
+    var events: [String] = []
+    model.retreat = { events.append("retreat") }
+    model.restore = { events.append("restore") }
+
+    model.send(.terminateApplication)
+    #expect(model.operationInProgress)
+    #expect(events == ["retreat"])
+    while model.operationInProgress { await Task.yield() }
+
+    #expect(events == ["retreat", "restore"])
+    #expect(model.state.applications.map(\.id) == [pid])
+}
 #endif

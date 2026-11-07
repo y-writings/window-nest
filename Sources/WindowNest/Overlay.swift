@@ -17,6 +17,8 @@ final class OverlayModel: ObservableObject {
     @Published private(set) var operationInProgress = false
     @Published private(set) var activationFailure: String?
     var dismiss: () -> Void = {}
+    var retreat: () -> Void = {}
+    var restore: () -> Void = {}
     var resetKeySequence: () -> Void = {}
     private let system: MacWindowSystem
     private let loadSnapshot: @MainActor (Bool) async -> MacWindowSystem.Snapshot
@@ -81,14 +83,17 @@ final class OverlayModel: ObservableObject {
     private func performDestructiveOperation(_ operation: @escaping @MainActor () async -> Bool) {
         guard !operationInProgress else { return }
         operationInProgress = true
-        // Give the target application room to show save/review sheets unobscured.
-        dismiss()
+        // Keep the overlay session alive while giving the target application room to show
+        // save/review sheets. Closing here used to remove the key monitor and forced users to
+        // invoke WindowNest again after every quit request.
+        retreat()
         Task {
             _ = await operation()
             // A successful API return is only acceptance of the request. Always reacquire the
             // real state; never optimistically remove the selected item.
             await reload()
             operationInProgress = false
+            restore()
         }
     }
 
@@ -154,6 +159,8 @@ final class OverlayPanelController {
         panel.hasShadow = true
         panel.contentViewController = NSHostingController(rootView: OverlayView(model: model))
         model.dismiss = { [weak self] in self?.close() }
+        model.retreat = { [weak self] in self?.retreat() }
+        model.restore = { [weak self] in self?.restore() }
         model.navigationBindings = settings.activeNavigationBindings
         model.resetKeySequence = { [weak self] in self?.matcher.reset() }
         navigationObserver = NotificationCenter.default.addObserver(forName: .navigationBindingsDidChange, object: nil, queue: .main) { [weak self] _ in
@@ -217,6 +224,16 @@ final class OverlayPanelController {
         model.cancelThumbnails()
         panel.orderOut(nil)
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor); self.keyMonitor = nil }
+    }
+
+    private func retreat() {
+        matcher.reset()
+        panel.orderBack(nil)
+    }
+
+    private func restore() {
+        guard panel.isVisible else { return }
+        panel.makeKeyAndOrderFront(nil)
     }
 
     static func match(for event: NSEvent, screen: BrowserScreen, firstResponder: NSResponder?,
