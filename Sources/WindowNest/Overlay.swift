@@ -17,11 +17,14 @@ final class OverlayModel: ObservableObject {
     @Published private(set) var operationInProgress = false
     @Published private(set) var activationFailure: String?
     var dismiss: () -> Void = {}
+    var retreat: () -> Void = {}
+    var restore: () -> Void = {}
     var resetKeySequence: () -> Void = {}
     private let system: MacWindowSystem
     private let loadSnapshot: @MainActor (Bool) async -> MacWindowSystem.Snapshot
     private var thumbnailTask: Task<Void, Never>?
     private var reloadGeneration = 0
+    private var operationGeneration = 0
 
     init(system: MacWindowSystem, loadSnapshot: (@MainActor (Bool) async -> MacWindowSystem.Snapshot)? = nil) {
         self.system = system
@@ -66,9 +69,13 @@ final class OverlayModel: ObservableObject {
                 }
             }
         case .terminateApplication(let pid):
-            performDestructiveOperation { [system] in await system.terminateApplication(pid) }
+            let application = system.runningApplications[pid]
+            performDestructiveOperation({ [system] in await system.terminateApplication(pid) },
+                                        completed: { application?.isTerminated == true })
         case .closeWindow(let id):
-            performDestructiveOperation { [system] in await system.closeWindow(id) }
+            let windowWasObservable = system.windowExists(id) == true
+            performDestructiveOperation({ [system] in await system.closeWindow(id) },
+                                        completed: { [system] in windowWasObservable && system.windowExists(id) == false })
         }
     }
 
@@ -78,18 +85,35 @@ final class OverlayModel: ObservableObject {
         inputMode = state.screen == .applications && !navigationBindings.hasAdditionalKeys ? .search : .list
     }
 
-    private func performDestructiveOperation(_ operation: @escaping @MainActor () async -> Bool) {
+    func performDestructiveOperation(_ operation: @escaping @MainActor () async -> Bool,
+                                     completed: @escaping @MainActor () -> Bool) {
         guard !operationInProgress else { return }
+        operationGeneration += 1
+        let generation = operationGeneration
         operationInProgress = true
-        // Give the target application room to show save/review sheets unobscured.
-        dismiss()
+        retreat()
         Task {
             _ = await operation()
-            // A successful API return is only acceptance of the request. Always reacquire the
-            // real state; never optimistically remove the selected item.
-            await reload()
+            // The request can return while a save confirmation is still open.
+            // shortcut: Stop polling after 30 seconds; the shortcut can restore the preserved session.
+            for _ in 0..<60 {
+                guard generation == operationGeneration else { return }
+                if completed() {
+                    await reload()
+                    guard generation == operationGeneration else { return }
+                    operationInProgress = false
+                    restore()
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
             operationInProgress = false
         }
+    }
+
+    func cancelPendingOperation() {
+        operationGeneration += 1
+        operationInProgress = false
     }
 
     func requestPermissions() {
@@ -128,14 +152,15 @@ final class OverlayPanelController {
     enum EventResult: Equatable {
         case unhandled, consumed, command(NavigationCommand), startSearch, leaveSearch
     }
-    private let model: OverlayModel
-    private let panel: NSPanel
+    let model: OverlayModel
+    let panel: NSPanel
     private var keyMonitor: Any?
     private let settings: ShortcutSettings
     private var matcher: NavigationKeyMatcher
     private var navigationObserver: NSObjectProtocol?
     private var resignObserver: NSObjectProtocol?
     private var searchModeObserver: AnyCancellable?
+    private var isRetreated = false
 
     init(windowSystem: MacWindowSystem, settings: ShortcutSettings) {
         self.settings = settings
@@ -154,6 +179,8 @@ final class OverlayPanelController {
         panel.hasShadow = true
         panel.contentViewController = NSHostingController(rootView: OverlayView(model: model))
         model.dismiss = { [weak self] in self?.close() }
+        model.retreat = { [weak self] in self?.retreat() }
+        model.restore = { [weak self] in self?.restore() }
         model.navigationBindings = settings.activeNavigationBindings
         model.resetKeySequence = { [weak self] in self?.matcher.reset() }
         navigationObserver = NotificationCenter.default.addObserver(forName: .navigationBindingsDidChange, object: nil, queue: .main) { [weak self] _ in
@@ -183,6 +210,12 @@ final class OverlayPanelController {
     }
 
     func present() {
+        if isRetreated {
+            model.cancelPendingOperation()
+            restore()
+            Task { await model.reload() }
+            return
+        }
         guard !panel.isVisible else { close(); return }
         model.state = BrowserState(searchMode: model.state.searchMode)
         model.inputMode = settings.activeNavigationBindings.hasAdditionalKeys ? .list : .search
@@ -213,10 +246,24 @@ final class OverlayPanelController {
     }
 
     private func close() {
+        model.cancelPendingOperation()
+        isRetreated = false
         matcher.reset()
         model.cancelThumbnails()
         panel.orderOut(nil)
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor); self.keyMonitor = nil }
+    }
+
+    private func retreat() {
+        matcher.reset()
+        isRetreated = true
+        panel.orderOut(nil)
+    }
+
+    private func restore() {
+        guard isRetreated else { return }
+        isRetreated = false
+        panel.makeKeyAndOrderFront(nil)
     }
 
     static func match(for event: NSEvent, screen: BrowserScreen, firstResponder: NSResponder?,

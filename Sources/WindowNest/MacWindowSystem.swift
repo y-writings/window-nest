@@ -185,6 +185,14 @@ final class MacWindowSystem {
         return result == .requested
     }
 
+    func windowExists(_ id: WindowID) -> Bool? {
+        guard let windows = CGWindowListCopyWindowInfo([.optionIncludingWindow], id.windowNumber) as? [[CFString: Any]] else { return nil }
+        return windows.contains {
+            ($0[kCGWindowNumber] as? UInt32) == id.windowNumber
+                && ($0[kCGWindowOwnerPID] as? Int32) == id.processIdentifier
+        }
+    }
+
     /// Runs outside the main actor because AX calls can wait for an unresponsive target. A timeout
     /// releases the UI even though the system call itself cannot safely be cancelled.
     nonisolated private static func closeWindowSynchronously(_ id: WindowID) -> CloseResult {
