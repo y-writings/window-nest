@@ -19,14 +19,24 @@ final class OverlayModel: ObservableObject {
     var dismiss: () -> Void = {}
     var resetKeySequence: () -> Void = {}
     private let system: MacWindowSystem
+    private let loadSnapshot: @MainActor (Bool) async -> MacWindowSystem.Snapshot
     private var thumbnailTask: Task<Void, Never>?
+    private var reloadGeneration = 0
 
-    init(system: MacWindowSystem) { self.system = system }
+    init(system: MacWindowSystem, loadSnapshot: (@MainActor (Bool) async -> MacWindowSystem.Snapshot)? = nil) {
+        self.system = system
+        self.loadSnapshot = loadSnapshot ?? { [system] prompt in await system.snapshot(promptForAccessibility: prompt) }
+    }
 
     func reload(prompt: Bool = false) async {
+        reloadGeneration += 1
+        let generation = reloadGeneration
         resetKeySequence()
         loading = true
-        let snapshot = await system.snapshot(promptForAccessibility: prompt)
+        let snapshot = await loadSnapshot(prompt)
+        // Keep the visible list and its termination targets from the same reload.
+        guard generation == reloadGeneration else { return }
+        system.accept(snapshot)
         permission = snapshot.permission
         icons = snapshot.icons
         let priorScreen = state.screen

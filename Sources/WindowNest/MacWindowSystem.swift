@@ -13,17 +13,22 @@ final class MacWindowSystem {
     }
 
     private static let logger = Logger(subsystem: "com.ywritings.WindowNest", category: "WindowActivation")
-    struct Snapshot { let applications: [ApplicationItem]; let icons: [Int32: NSImage]; let permission: PermissionState }
+    struct Snapshot {
+        let applications: [ApplicationItem]
+        let icons: [Int32: NSImage]
+        let permission: PermissionState
+        let runningApplications: [Int32: NSRunningApplication]
+    }
     struct WindowDescription: Sendable { let id: WindowID; let attributes: WindowAttributes; let isOnScreen: Bool }
     private struct AccessibilityWindow { let element: AXUIElement; let attributes: WindowAttributes; let isMinimized: Bool }
-    private var runningApplications: [Int32: NSRunningApplication] = [:]
+    private(set) var runningApplications: [Int32: NSRunningApplication] = [:]
 
     func snapshot(promptForAccessibility: Bool = false) async -> Snapshot {
         let axOptions = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: promptForAccessibility] as CFDictionary
         let accessibility = AXIsProcessTrustedWithOptions(axOptions)
         let screen = CGPreflightScreenCaptureAccess()
         let permission: PermissionState = accessibility ? (screen ? .ready : .screenRecordingRequired) : (screen ? .accessibilityRequired : .bothRequired)
-        guard accessibility else { return Snapshot(applications: [], icons: [:], permission: permission) }
+        guard accessibility else { return Snapshot(applications: [], icons: [:], permission: permission, runningApplications: [:]) }
 
         let running = Dictionary(uniqueKeysWithValues: NSWorkspace.shared.runningApplications.map { ($0.processIdentifier, $0) })
         let windowsByPID = Dictionary(grouping: Self.cgWindowDescriptions(running: running), by: \.id.processIdentifier)
@@ -48,11 +53,14 @@ final class MacWindowSystem {
         let icons = Dictionary(uniqueKeysWithValues: applications.compactMap { item in running[item.id]?.icon.map { (item.id, $0) } })
         // Preserve the exact object selected from this snapshot. Termination must not look an
         // application up again by a PID which the OS could have reused in the meantime.
-        runningApplications = Dictionary(uniqueKeysWithValues: applications.compactMap { item in
+        let selectedApplications = Dictionary(uniqueKeysWithValues: applications.compactMap { item in
             running[item.id].map { (item.id, $0) }
         })
-        return Snapshot(applications: applications, icons: icons, permission: permission)
+        return Snapshot(applications: applications, icons: icons, permission: permission,
+                        runningApplications: selectedApplications)
     }
+
+    func accept(_ snapshot: Snapshot) { runningApplications = snapshot.runningApplications }
 
     private nonisolated static func snapshotWindowItems(_ allWindows: [WindowDescription], for pid: Int32) -> [WindowItem] {
         let axWindows = allWindows.contains { !$0.isOnScreen || $0.attributes.title == nil }
