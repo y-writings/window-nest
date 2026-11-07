@@ -13,42 +13,70 @@ final class MacWindowSystem {
     }
 
     private static let logger = Logger(subsystem: "com.ywritings.WindowNest", category: "WindowActivation")
-    struct Snapshot { let applications: [ApplicationItem]; let icons: [Int32: NSImage]; let permission: PermissionState }
-    private struct WindowDescription { let id: WindowID; let attributes: WindowAttributes }
-    private struct AccessibilityWindow { let element: AXUIElement; let attributes: WindowAttributes }
-    private var runningApplications: [Int32: NSRunningApplication] = [:]
+    struct Snapshot {
+        let applications: [ApplicationItem]
+        let icons: [Int32: NSImage]
+        let permission: PermissionState
+        let runningApplications: [Int32: NSRunningApplication]
+    }
+    struct WindowDescription: Sendable { let id: WindowID; let attributes: WindowAttributes; let isOnScreen: Bool }
+    private struct AccessibilityWindow { let element: AXUIElement; let attributes: WindowAttributes; let isMinimized: Bool }
+    private(set) var runningApplications: [Int32: NSRunningApplication] = [:]
 
     func snapshot(promptForAccessibility: Bool = false) async -> Snapshot {
         let axOptions = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: promptForAccessibility] as CFDictionary
         let accessibility = AXIsProcessTrustedWithOptions(axOptions)
         let screen = CGPreflightScreenCaptureAccess()
         let permission: PermissionState = accessibility ? (screen ? .ready : .screenRecordingRequired) : (screen ? .accessibilityRequired : .bothRequired)
-        guard accessibility else { return Snapshot(applications: [], icons: [:], permission: permission) }
+        guard accessibility else { return Snapshot(applications: [], icons: [:], permission: permission, runningApplications: [:]) }
 
         let running = Dictionary(uniqueKeysWithValues: NSWorkspace.shared.runningApplications.map { ($0.processIdentifier, $0) })
-        let grouped = Dictionary(grouping: Self.windowDescriptions(running: running), by: \.id.processIdentifier)
-        let applications = grouped.compactMap { pid, windows -> ApplicationItem? in
-            guard let app = running[pid], !windows.isEmpty else { return nil }
-            let axWindows = windows.contains { $0.attributes.title == nil } ? Self.accessibilityWindows(for: pid) : []
-            let attributes = windows.map(\.attributes)
-            let axAttributes = axWindows.map(\.attributes)
-            let items = windows.enumerated().map { index, window in
-                var title = window.attributes.title
-                if title == nil, let match = window.attributes.uniqueMatch(in: axAttributes),
-                   axAttributes[match].uniqueMatch(in: attributes) == index {
-                    title = axAttributes[match].title
+        let windowsByPID = Dictionary(grouping: Self.cgWindowDescriptions(running: running), by: \.id.processIdentifier)
+        let grouped = await withTaskGroup(of: (Int32, [WindowItem]).self, returning: [Int32: [WindowItem]].self) { group in
+            for (pid, windows) in windowsByPID {
+                group.addTask {
+                    let visible = windows.filter(\.isOnScreen).map { WindowItem(id: $0.id, title: $0.attributes.title ?? "") }
+                    let items = await Self.bounded(timeout: 2, fallback: visible) {
+                        Self.snapshotWindowItems(windows, for: pid)
+                    }
+                    return (pid, items)
                 }
-                return WindowItem(id: window.id, title: title ?? "")
             }
+            var itemsByPID: [Int32: [WindowItem]] = [:]
+            for await (pid, items) in group { itemsByPID[pid] = items }
+            return itemsByPID
+        }
+        let applications = grouped.compactMap { pid, items -> ApplicationItem? in
+            guard let app = running[pid], !items.isEmpty else { return nil }
             return ApplicationItem(id: pid, name: app.localizedName ?? "Unknown App", bundleIdentifier: app.bundleIdentifier, windows: items)
         }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         let icons = Dictionary(uniqueKeysWithValues: applications.compactMap { item in running[item.id]?.icon.map { (item.id, $0) } })
         // Preserve the exact object selected from this snapshot. Termination must not look an
         // application up again by a PID which the OS could have reused in the meantime.
-        runningApplications = Dictionary(uniqueKeysWithValues: applications.compactMap { item in
+        let selectedApplications = Dictionary(uniqueKeysWithValues: applications.compactMap { item in
             running[item.id].map { (item.id, $0) }
         })
-        return Snapshot(applications: applications, icons: icons, permission: permission)
+        return Snapshot(applications: applications, icons: icons, permission: permission,
+                        runningApplications: selectedApplications)
+    }
+
+    func accept(_ snapshot: Snapshot) { runningApplications = snapshot.runningApplications }
+
+    private nonisolated static func snapshotWindowItems(_ allWindows: [WindowDescription], for pid: Int32) -> [WindowItem] {
+        let axWindows = allWindows.contains { !$0.isOnScreen || $0.attributes.title == nil }
+            ? accessibilityWindows(for: pid) : []
+        let minimized = axWindows.filter(\.isMinimized).map(\.attributes)
+        let windows = listedWindows(allWindows, minimized: minimized)
+        let attributes = windows.map(\.attributes)
+        let axAttributes = axWindows.map(\.attributes)
+        return windows.enumerated().map { index, window in
+            var title = window.attributes.title
+            if title == nil, let match = window.attributes.uniqueMatch(in: axAttributes),
+               axAttributes[match].uniqueMatch(in: attributes) == index {
+                title = axAttributes[match].title
+            }
+            return WindowItem(id: window.id, title: title ?? "")
+        }
     }
 
     func thumbnail(for id: WindowID) async -> NSImage? {
@@ -91,6 +119,11 @@ final class MacWindowSystem {
         guard Self.windowDescriptions(running: running).contains(where: { $0.id == id && $0.attributes == attributes[target] }) else {
             return failure("The selected window changed before it could be activated.")
         }
+        if axWindows[match].isMinimized {
+            guard AXUIElementSetAttributeValue(axWindows[match].element, kAXMinimizedAttribute as CFString, kCFBooleanFalse) == .success else {
+                return failure("macOS did not restore the selected window.")
+            }
+        }
         guard app.activate(options: [.activateIgnoringOtherApps]) else {
             return failure("macOS did not activate the application.")
         }
@@ -111,16 +144,16 @@ final class MacWindowSystem {
 
     enum CloseResult: Equatable, Sendable { case requested, unavailable, timedOut }
 
-    private final class CloseCompletion: @unchecked Sendable {
+    private final class Completion<Value: Sendable>: @unchecked Sendable {
         private let lock = NSLock()
-        private var continuation: CheckedContinuation<CloseResult, Never>?
-        private var result: CloseResult?
-        func install(_ continuation: CheckedContinuation<CloseResult, Never>) {
+        private var continuation: CheckedContinuation<Value, Never>?
+        private var result: Value?
+        func install(_ continuation: CheckedContinuation<Value, Never>) {
             lock.lock()
             if let result { lock.unlock(); continuation.resume(returning: result) }
             else { self.continuation = continuation; lock.unlock() }
         }
-        func finish(_ result: CloseResult) {
+        func finish(_ result: Value) {
             lock.lock()
             guard self.result == nil else { lock.unlock(); return }
             self.result = result
@@ -131,16 +164,23 @@ final class MacWindowSystem {
         }
     }
 
-    func closeWindow(_ id: WindowID) async -> Bool {
-        let completion = CloseCompletion()
-        let result = await withCheckedContinuation { continuation in
+    nonisolated static func bounded<Value: Sendable>(timeout: TimeInterval, fallback: Value,
+                                                    work: @escaping @Sendable () -> Value) async -> Value {
+        let completion = Completion<Value>()
+        return await withCheckedContinuation { continuation in
             completion.install(continuation)
             DispatchQueue.global(qos: .userInitiated).async {
-                completion.finish(Self.closeWindowSynchronously(id))
+                completion.finish(work())
             }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-                completion.finish(.timedOut)
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                completion.finish(fallback)
             }
+        }
+    }
+
+    func closeWindow(_ id: WindowID) async -> Bool {
+        let result = await Self.bounded(timeout: 2, fallback: CloseResult.timedOut) {
+            Self.closeWindowSynchronously(id)
         }
         return result == .requested
     }
@@ -173,16 +213,38 @@ final class MacWindowSystem {
     }
 
     private nonisolated static func windowDescriptions(running: [Int32: NSRunningApplication]) -> [WindowDescription] {
+        let windows = cgWindowDescriptions(running: running)
+        return Dictionary(grouping: windows, by: \.id.processIdentifier).flatMap { pid, windows in
+            let minimized = windows.contains { !$0.isOnScreen }
+                ? accessibilityWindows(for: pid).filter(\.isMinimized).map(\.attributes) : []
+            return listedWindows(windows, minimized: minimized)
+        }
+    }
+
+    private nonisolated static func cgWindowDescriptions(running: [Int32: NSRunningApplication]) -> [WindowDescription] {
         let ownPID = ProcessInfo.processInfo.processIdentifier
-        let descriptions = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[CFString: Any]]) ?? []
-        return descriptions.compactMap { description in
+        let descriptions = (CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[CFString: Any]]) ?? []
+        return descriptions.compactMap { description -> WindowDescription? in
             guard let pid = description[kCGWindowOwnerPID] as? Int32, pid != ownPID,
                   let number = description[kCGWindowNumber] as? UInt32,
                   (description[kCGWindowLayer] as? Int) == 0,
                   running[pid]?.activationPolicy == .regular else { return nil }
             let frame = (description[kCGWindowBounds] as? [String: Any]).flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) }
             return WindowDescription(id: WindowID(processIdentifier: pid, windowNumber: number),
-                                     attributes: WindowAttributes(title: description[kCGWindowName] as? String, frame: frame))
+                                     attributes: WindowAttributes(title: description[kCGWindowName] as? String, frame: frame),
+                                     isOnScreen: (description[kCGWindowIsOnscreen] as? Bool) == true)
+        }
+    }
+
+    nonisolated static func listedWindows(_ windows: [WindowDescription], minimized: [WindowAttributes]) -> [WindowDescription] {
+        let attributes = windows.map(\.attributes)
+        return windows.enumerated().compactMap { index, window in
+            if window.isOnScreen { return window }
+            // Offscreen CG entries also include application internals. Only add uniquely
+            // matched minimized windows from this process's Accessibility window list.
+            guard let match = window.attributes.uniqueMatch(in: minimized),
+                  minimized[match].uniqueMatch(in: attributes) == index else { return nil }
+            return window
         }
     }
 
@@ -193,8 +255,12 @@ final class MacWindowSystem {
               let elements = value as? [AXUIElement] else { return [] }
         return elements.map { element in
             var title: CFTypeRef?
+            var minimized: CFTypeRef?
             AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &title)
-            return AccessibilityWindow(element: element, attributes: WindowAttributes(title: title as? String, frame: accessibilityFrame(of: element)))
+            AXUIElementCopyAttributeValue(element, kAXMinimizedAttribute as CFString, &minimized)
+            return AccessibilityWindow(element: element,
+                                       attributes: WindowAttributes(title: title as? String, frame: accessibilityFrame(of: element)),
+                                       isMinimized: (minimized as? Bool) == true)
         }
     }
 
