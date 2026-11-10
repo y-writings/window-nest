@@ -216,8 +216,8 @@ private struct NavigationBindingRow: View {
     @State(initialValue: NavigationKeyRecording()) private var recording: NavigationKeyRecording
     private var title: String {
         switch action {
-        case .left: "Left"; case .down: "Down"; case .up: "Up"; case .right: "Right"
-        case .rowStart: "Row start"; case .rowEnd: "Row end"; case .listStart: "List start"; case .listEnd: "List end"
+        case .left: "Left"; case .right: "Right"
+        case .listStart: "List start"; case .listEnd: "List end"
         }
     }
     var body: some View {

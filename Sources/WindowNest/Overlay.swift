@@ -167,7 +167,7 @@ final class OverlayPanelController {
         matcher = NavigationKeyMatcher(bindings: settings.activeNavigationBindings)
         model = OverlayModel(system: windowSystem)
         model.state = BrowserState(searchMode: settings.applicationSearchMode)
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 920, height: 600), styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 920, height: 400), styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .popUpMenu
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
@@ -329,8 +329,6 @@ final class OverlayPanelController {
         switch event.keyCode {
         case 123: return .moveLeft
         case 124: return .moveRight
-        case 125: return .moveDown
-        case 126: return .moveUp
         case 36, 76: return .confirm
         case 53: return .escape
         default:
@@ -343,7 +341,6 @@ final class OverlayPanelController {
 struct OverlayView: View {
     @ObservedObject var model: OverlayModel
     @FocusState private var searchFocused: Bool
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
 
     enum CardID: Hashable {
         case application(Int32)
@@ -372,7 +369,7 @@ struct OverlayView: View {
             footer
         }
         .padding(20)
-        .frame(minWidth: 760, minHeight: 480)
+        .frame(minWidth: 760, minHeight: model.permission == .ready ? 360 : 600)
         .background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 20))
         .onAppear { focusSearchIfNeeded() }
         .onChange(of: model.state.screen) { _, _ in focusSearchIfNeeded() }
@@ -437,21 +434,24 @@ struct OverlayView: View {
 
     private var cards: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVGrid(columns: columns, spacing: 12) {
+            ScrollView(.horizontal) {
+                HStack(spacing: 12) {
                     if case .applications = model.state.screen {
                         ForEach(Array(model.state.visibleApplications.enumerated()), id: \.element.id) { index, app in
                             AppCard(app: app, icon: model.icons[app.id], selected: index == model.state.selectedIndex)
+                                .frame(width: 280)
                                 .id(CardID.application(app.id))
                         }
                     } else {
                         ForEach(Array(model.state.visibleWindows.enumerated()), id: \.element.id) { index, window in
                             WindowCard(window: window, thumbnail: model.thumbnails[window.id], number: index < 9 ? index + 1 : nil, selected: index == model.state.selectedIndex)
+                                .frame(width: 280)
                                 .id(CardID.window(window.id))
                         }
                     }
                 }.padding(4)
             }
+            .frame(maxHeight: .infinity)
             .id(model.state.screen)
             .onAppear { scrollToSelection(with: proxy) }
             .onChange(of: model.state.selectedIndex) { _, _ in
@@ -490,7 +490,7 @@ struct OverlayView: View {
     private func scrollToFirstApplication(with proxy: ScrollViewProxy) {
         guard case .applications = model.state.screen,
               let id = model.state.visibleApplications.first?.id else { return }
-        proxy.scrollTo(CardID.application(id), anchor: .top)
+        proxy.scrollTo(CardID.application(id), anchor: .leading)
     }
 
     private func focusSearchIfNeeded() {
@@ -526,12 +526,12 @@ struct OverlayView: View {
         if case .applications = model.state.screen {
             if model.inputMode == .search {
                 return model.navigationBindings.hasAdditionalKeys
-                    ? "Type to search   ↑ ↓ Select   ⏎ Confirm   esc List"
-                    : "Type to search   ← ↑ ↓ → Select   ⏎ Confirm   esc Close"
+                    ? "Type to search   ← → Select   ⏎ Confirm   esc List"
+                    : "Type to search   ← → Select   ⏎ Confirm   esc Close"
             }
-            return "/ or ⌘F Search   ← ↑ ↓ → Select   ⏎ Confirm   esc Close"
+            return "/ or ⌘F Search   ← → Select   ⏎ Confirm   esc Close"
         }
-        return "← ↑ ↓ → Select   ⏎ Confirm   esc Applications"
+        return "← → Select   ⏎ Confirm   esc Applications"
     }
 
     private var modelFooterBindings: String {

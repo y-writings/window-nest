@@ -1,15 +1,11 @@
 import Foundation
 
 public enum NavigationAction: String, CaseIterable, Codable, Sendable {
-    case left, down, up, right, rowStart, rowEnd, listStart, listEnd
+    case left, right, listStart, listEnd
     public var command: NavigationCommand {
         switch self {
         case .left: .moveLeft
-        case .down: .moveDown
-        case .up: .moveUp
         case .right: .moveRight
-        case .rowStart: .moveToRowStart
-        case .rowEnd: .moveToRowEnd
         case .listStart: .moveToListStart
         case .listEnd: .moveToListEnd
         }
@@ -71,6 +67,26 @@ public struct NavigationKeyRecording: Sendable {
 public struct NavigationBindings: Codable, Equatable, Sendable {
     public var assignments: [NavigationAction: [KeySequence]]
     public init(assignments: [NavigationAction: [KeySequence]] = [:]) { self.assignments = assignments }
+
+    private enum CodingKeys: String, CodingKey { case assignments }
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        // Codable stores enum-keyed dictionaries as alternating keys and values.
+        var entries = try values.nestedUnkeyedContainer(forKey: .assignments)
+        assignments = [:]
+        while !entries.isAtEnd {
+            let name = try entries.decode(String.self)
+            let sequences = try entries.decode([KeySequence].self)
+            let action: NavigationAction?
+            switch name {
+            case "rowStart": action = .listStart
+            case "rowEnd": action = .listEnd
+            default: action = NavigationAction(rawValue: name)
+            }
+            if let action { assignments[action, default: []].append(contentsOf: sequences) }
+        }
+    }
+
     public static let standard = Self()
     /// Whether at least one usable sequence is configured. Empty assignment buckets left by
     /// settings edits are intentionally treated like the Standard preset.
@@ -78,11 +94,9 @@ public struct NavigationBindings: Codable, Equatable, Sendable {
         assignments.values.joined().contains { !$0.strokes.isEmpty }
     }
     public static let vim = Self(assignments: [
-        .left: [KeySequence([KeyStroke(key: "h")])], .down: [KeySequence([KeyStroke(key: "j")])],
-        .up: [KeySequence([KeyStroke(key: "k")])], .right: [KeySequence([KeyStroke(key: "l")])],
-        .rowStart: [KeySequence([KeyStroke(key: "0")])], .rowEnd: [KeySequence([KeyStroke(key: "$", modifiers: .shift)])],
-        .listStart: [KeySequence([KeyStroke(key: "g"), KeyStroke(key: "g")])],
-        .listEnd: [KeySequence([KeyStroke(key: "g", modifiers: .shift)])],
+        .left: [KeySequence([KeyStroke(key: "h")])], .right: [KeySequence([KeyStroke(key: "l")])],
+        .listStart: [KeySequence([KeyStroke(key: "0")]), KeySequence([KeyStroke(key: "g"), KeyStroke(key: "g")])],
+        .listEnd: [KeySequence([KeyStroke(key: "$", modifiers: .shift)]), KeySequence([KeyStroke(key: "g", modifiers: .shift)])],
     ])
 }
 
@@ -101,7 +115,7 @@ public enum BindingConflict: Error, Equatable, CustomStringConvertible {
 }
 
 public enum NavigationBindingValidator {
-    public static let reservedKeys: Set<String> = ["left", "right", "up", "down", "return", "keypadEnter", "escape", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+    public static let reservedKeys: Set<String> = ["left", "right", "return", "keypadEnter", "escape", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
     public static let reservedStrokes: Set<KeyStroke> = [
         KeyStroke(key: "q", modifiers: .command), KeyStroke(key: "w", modifiers: .command),
         KeyStroke(key: "return", modifiers: .command), KeyStroke(key: "keypadEnter", modifiers: .command),
