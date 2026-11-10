@@ -57,13 +57,26 @@ struct OverlayNavigationTests {
         let editor = NSTextView()
         var matcher = NavigationKeyMatcher(bindings: .vim)
         let cases: [(NSEvent, NavigationCommand)] = [
-            (try key("\u{f701}", code: kVK_DownArrow), .moveDown),
+            (try key("\u{f702}", code: kVK_LeftArrow), .moveLeft),
+            (try key("\u{f703}", code: kVK_RightArrow), .moveRight),
             (try key("\r", code: kVK_Return), .confirm),
             (try key("\u{1b}", code: kVK_Escape), .escape),
         ]
         for (event, command) in cases {
             #expect(OverlayPanelController.match(for: event, screen: .applications,
                 firstResponder: editor, matcher: &matcher) == .command(command))
+        }
+    }
+
+    @Test(arguments: [BrowserScreen.applications, .windows(applicationID: 1)])
+    func formerVerticalKeysDoNotNavigate(screen: BrowserScreen) throws {
+        var matcher = NavigationKeyMatcher(bindings: .vim)
+        for event in [try key("\u{f700}", code: kVK_UpArrow),
+                      try key("\u{f701}", code: kVK_DownArrow),
+                      try key("j", code: kVK_ANSI_J),
+                      try key("k", code: kVK_ANSI_K)] {
+            #expect(OverlayPanelController.match(for: event, screen: screen,
+                firstResponder: nil, matcher: &matcher) == .unhandled)
         }
     }
 

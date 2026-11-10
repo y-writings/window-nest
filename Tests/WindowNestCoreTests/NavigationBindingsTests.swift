@@ -12,39 +12,54 @@ private func apps(_ count: Int) -> [ApplicationItem] {
     (0..<count).map { ApplicationItem(id: Int32($0), name: "\($0)", windows: []) }
 }
 
-@Test func gridDestinationsUseRealCards() {
-    var state = BrowserState(applications: apps(7), columnCount: 3)
-    for _ in 0..<4 { _ = state.handle(.moveRight) }
-    _ = state.handle(.moveToRowStart); #expect(state.selectedIndex == 3)
-    _ = state.handle(.moveRight); _ = state.handle(.moveToRowEnd); #expect(state.selectedIndex == 5)
+@Test func horizontalNavigationStopsAtListBoundaries() {
+    var state = BrowserState(applications: apps(4))
+    #expect(state.handle(.moveLeft) == .none); #expect(state.selectedIndex == 0)
+    for index in 1...3 {
+        #expect(state.handle(.moveRight) == .none)
+        #expect(state.selectedIndex == index)
+    }
+    _ = state.handle(.moveRight); #expect(state.selectedIndex == 3)
+    _ = state.handle(.moveLeft); #expect(state.selectedIndex == 2)
     _ = state.handle(.moveToListStart); #expect(state.selectedIndex == 0)
-    _ = state.handle(.moveToListEnd); #expect(state.selectedIndex == 6)
-    _ = state.handle(.moveToRowStart); #expect(state.selectedIndex == 6)
-    _ = state.handle(.moveToRowEnd); #expect(state.selectedIndex == 6)
-    #expect(state.handle(.moveDown) == .none); #expect(state.selectedIndex == 6)
+    _ = state.handle(.moveToListEnd); #expect(state.selectedIndex == 3)
 }
 
-@Test func emptyAndSingleItemNavigationIsSafe() {
-    var empty = BrowserState(); _ = empty.handle(.moveToListEnd); #expect(empty.selectedIndex == 0)
-    var single = BrowserState(applications: apps(1)); _ = single.handle(.moveToRowEnd); #expect(single.selectedIndex == 0)
+@Test(arguments: [0, 1]) func emptyAndSingleItemNavigationIsSafe(count: Int) {
+    var state = BrowserState(applications: apps(count))
+    for command in [NavigationCommand.moveLeft, .moveRight, .moveToListStart, .moveToListEnd] {
+        #expect(state.handle(command) == .none)
+        #expect(state.selectedIndex == 0)
+    }
+}
+
+@Test func listDestinationsUseWindowsWhenInsideAnApplication() {
+    let windows = (1...4).map {
+        WindowItem(id: WindowID(processIdentifier: 1, windowNumber: UInt32($0)), title: "Window \($0)")
+    }
+    var state = BrowserState(applications: [ApplicationItem(id: 1, name: "App", windows: windows)])
+    state.handle(.showWindows)
+    state.handle(.moveToListEnd)
+    #expect(state.handle(.confirm) == .activate(windows[3].id))
+    state.handle(.moveToListStart)
+    #expect(state.handle(.confirm) == .activate(windows[0].id))
 }
 
 @Test func navigationDestinationsStayWithinFilteredApplications() {
     let applications = ["Other", "Match A", "Match B", "Match C", "Match D", "Hidden"].enumerated().map {
         ApplicationItem(id: Int32($0.offset), name: $0.element, windows: [])
     }
-    var state = BrowserState(applications: applications, columnCount: 3)
+    var state = BrowserState(applications: applications)
     state.updateSearchQuery("match")
-    state.handle(.moveToRowEnd)
-    #expect(state.selectedApplication?.name == "Match C")
     state.handle(.moveToListEnd)
     #expect(state.selectedApplication?.name == "Match D")
-    state.handle(.moveToRowEnd)
+    state.handle(.moveRight)
     #expect(state.selectedIndex == 3)
+    state.handle(.moveToListStart)
+    #expect(state.selectedApplication?.name == "Match A")
 
     state.updateSearchQuery("missing")
     state.handle(.moveToListEnd)
-    state.handle(.moveToRowEnd)
     #expect(state.selectedIndex == 0)
     #expect(state.selectedApplication == nil)
     #expect(state.handle(.confirm) == .none)
@@ -56,7 +71,8 @@ private func apps(_ count: Int) -> [ApplicationItem] {
     #expect(matcher.match(KeyStroke(key: "g"), at: 1) == .moveToListStart)
     #expect(matcher.match(KeyStroke(key: "G"), at: 2) == .moveToListEnd)
     #expect(matcher.match(KeyStroke(key: "h", modifiers: .control), at: 3) == nil)
-    #expect(matcher.match(KeyStroke(key: "$", modifiers: .shift), at: 4) == .moveToRowEnd)
+    #expect(matcher.match(KeyStroke(key: "$", modifiers: .shift), at: 4) == .moveToListEnd)
+    #expect(matcher.match(KeyStroke(key: "0"), at: 4.1) == .moveToListStart)
     #expect(matcher.match(KeyStroke(key: "4"), at: 5) == nil)
 }
 
@@ -79,7 +95,7 @@ private func apps(_ count: Int) -> [ApplicationItem] {
     let prefix = NavigationBindings(assignments: [.left: [KeySequence([KeyStroke(key: "g")])], .right: [KeySequence([KeyStroke(key: "g"), KeyStroke(key: "h")])]])
     #expect(NavigationBindingValidator.validate(prefix) != nil)
     #expect(NavigationBindingValidator.validate(.vim, globalShortcut: KeyStroke(key: "h")) != nil)
-    let allowed = NavigationBindings(assignments: [.left: [KeySequence([KeyStroke(key: "g"), KeyStroke(key: "g")])], .right: [KeySequence([KeyStroke(key: "g"), KeyStroke(key: "h")])], .down: [KeySequence([KeyStroke(key: "n", modifiers: .control)])]])
+    let allowed = NavigationBindings(assignments: [.left: [KeySequence([KeyStroke(key: "g"), KeyStroke(key: "g")])], .right: [KeySequence([KeyStroke(key: "g"), KeyStroke(key: "h")])], .listEnd: [KeySequence([KeyStroke(key: "n", modifiers: .control)])]])
     #expect(NavigationBindingValidator.validate(allowed) == nil)
 }
 
@@ -100,6 +116,55 @@ private func apps(_ count: Int) -> [ApplicationItem] {
     #expect(NavigationBindingsStore(defaults: defaults).load() == NavigationBindings(assignments: [
         .left: [KeySequence([KeyStroke(key: "h")])],
     ]))
+}
+
+@Test(arguments: [false, true]) func legacyGridBindingsPreserveHorizontalKeys(rowKeysFirst: Bool) throws {
+    let suite = "WindowNestTests-\(UUID())"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let rows = #"""
+    "rowStart", [{"strokes":[{"key":"0","modifiers":0}]}],
+    "rowEnd", [{"strokes":[{"key":"$","modifiers":1}]}]
+    """#
+    let lists = #"""
+    "listStart", [{"strokes":[{"key":"g","modifiers":0},{"key":"g","modifiers":0}]}],
+    "listEnd", [{"strokes":[{"key":"g","modifiers":1}]}]
+    """#
+    let legacyJSON = """
+    {"assignments":[
+        "left", [{"strokes":[{"key":"h","modifiers":0}]}],
+        "right", [{"strokes":[{"key":"l","modifiers":0}]}],
+        "up", [{"strokes":[{"key":"k","modifiers":0}]}],
+        "down", [{"strokes":[{"key":"j","modifiers":0}]}],
+        \(rowKeysFirst ? rows : lists), \(rowKeysFirst ? lists : rows)
+    ]}
+    """
+    let data = Data(legacyJSON.utf8)
+    defaults.set(data, forKey: "navigationBindings")
+    let store = NavigationBindingsStore(defaults: defaults)
+    let loaded = store.load()
+    for action in NavigationAction.allCases {
+        #expect(Set(loaded.assignments[action] ?? []) == Set(NavigationBindings.vim.assignments[action] ?? []))
+    }
+    #expect(defaults.data(forKey: "navigationBindings") == data)
+    try store.save(loaded)
+    #expect(store.load() == loaded)
+}
+
+@Test func legacyVerticalOnlyBindingsBecomeStandard() throws {
+    let suite = "WindowNestTests-\(UUID())"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let legacyJSON = #"""
+    {"assignments":[
+        "up", [{"strokes":[{"key":"k","modifiers":0}]}],
+        "down", [{"strokes":[{"key":"j","modifiers":0}]}]
+    ]}
+    """#
+    defaults.set(Data(legacyJSON.utf8), forKey: "navigationBindings")
+    let loaded = NavigationBindingsStore(defaults: defaults).load()
+    #expect(loaded == .standard)
+    #expect(!loaded.hasAdditionalKeys)
 }
 
 @Test func tabAliasesConflictWithEveryGlobalModifierCombination() {

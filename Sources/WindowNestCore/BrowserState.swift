@@ -6,12 +6,10 @@ public struct BrowserState: Equatable, Sendable {
     public private(set) var searchMode: ApplicationSearchMode
     public private(set) var screen: BrowserScreen = .applications
     public private(set) var selectedIndex = 0
-    public var columnCount: Int
 
-    public init(applications: [ApplicationItem] = [], columnCount: Int = 3, searchMode: ApplicationSearchMode = .fuzzy) {
+    public init(applications: [ApplicationItem] = [], searchMode: ApplicationSearchMode = .fuzzy) {
         self.applications = applications
         self.searchMode = searchMode
-        self.columnCount = max(columnCount, 1)
         clampSelection()
     }
 
@@ -66,12 +64,6 @@ public struct BrowserState: Equatable, Sendable {
         switch command {
         case .moveLeft: move(by: -1, count: count)
         case .moveRight: move(by: 1, count: count)
-        case .moveUp: move(by: -columnCount, count: count)
-        case .moveDown: move(by: columnCount, count: count)
-        case .moveToRowStart:
-            move(to: (selectedIndex / columnCount) * columnCount, count: count)
-        case .moveToRowEnd:
-            move(to: min(((selectedIndex / columnCount) + 1) * columnCount - 1, count - 1), count: count)
         case .moveToListStart: move(to: 0, count: count)
         case .moveToListEnd: move(to: count - 1, count: count)
         case .confirm:
