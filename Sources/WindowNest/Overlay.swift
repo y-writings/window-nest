@@ -24,6 +24,7 @@ final class OverlayModel: ObservableObject {
     private let loadSnapshot: @MainActor (Bool) async -> MacWindowSystem.Snapshot
     private var thumbnailTask: Task<Void, Never>?
     private var reloadGeneration = 0
+    private var operationGeneration = 0
 
     init(system: MacWindowSystem, loadSnapshot: (@MainActor (Bool) async -> MacWindowSystem.Snapshot)? = nil) {
         self.system = system
@@ -68,9 +69,13 @@ final class OverlayModel: ObservableObject {
                 }
             }
         case .terminateApplication(let pid):
-            performDestructiveOperation { [system] in await system.terminateApplication(pid) }
+            let application = system.runningApplications[pid]
+            performDestructiveOperation({ [system] in await system.terminateApplication(pid) },
+                                        completed: { application?.isTerminated == true })
         case .closeWindow(let id):
-            performDestructiveOperation { [system] in await system.closeWindow(id) }
+            let windowWasObservable = system.windowExists(id) == true
+            performDestructiveOperation({ [system] in await system.closeWindow(id) },
+                                        completed: { [system] in windowWasObservable && system.windowExists(id) == false })
         }
     }
 
@@ -80,21 +85,35 @@ final class OverlayModel: ObservableObject {
         inputMode = state.screen == .applications && !navigationBindings.hasAdditionalKeys ? .search : .list
     }
 
-    private func performDestructiveOperation(_ operation: @escaping @MainActor () async -> Bool) {
+    func performDestructiveOperation(_ operation: @escaping @MainActor () async -> Bool,
+                                     completed: @escaping @MainActor () -> Bool) {
         guard !operationInProgress else { return }
+        operationGeneration += 1
+        let generation = operationGeneration
         operationInProgress = true
-        // Keep the overlay session alive while giving the target application room to show
-        // save/review sheets. Closing here used to remove the key monitor and forced users to
-        // invoke WindowNest again after every quit request.
         retreat()
         Task {
             _ = await operation()
-            // A successful API return is only acceptance of the request. Always reacquire the
-            // real state; never optimistically remove the selected item.
-            await reload()
+            // The request can return while a save confirmation is still open.
+            // shortcut: Stop polling after 30 seconds; the shortcut can restore the preserved session.
+            for _ in 0..<60 {
+                guard generation == operationGeneration else { return }
+                if completed() {
+                    await reload()
+                    guard generation == operationGeneration else { return }
+                    operationInProgress = false
+                    restore()
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
             operationInProgress = false
-            restore()
         }
+    }
+
+    func cancelPendingOperation() {
+        operationGeneration += 1
+        operationInProgress = false
     }
 
     func requestPermissions() {
@@ -133,21 +152,22 @@ final class OverlayPanelController {
     enum EventResult: Equatable {
         case unhandled, consumed, command(NavigationCommand), startSearch, leaveSearch
     }
-    private let model: OverlayModel
-    private let panel: NSPanel
+    let model: OverlayModel
+    let panel: NSPanel
     private var keyMonitor: Any?
     private let settings: ShortcutSettings
     private var matcher: NavigationKeyMatcher
     private var navigationObserver: NSObjectProtocol?
     private var resignObserver: NSObjectProtocol?
     private var searchModeObserver: AnyCancellable?
+    private var isRetreated = false
 
     init(windowSystem: MacWindowSystem, settings: ShortcutSettings) {
         self.settings = settings
         matcher = NavigationKeyMatcher(bindings: settings.activeNavigationBindings)
         model = OverlayModel(system: windowSystem)
         model.state = BrowserState(searchMode: settings.applicationSearchMode)
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 920, height: 600), styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 920, height: 400), styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .popUpMenu
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
@@ -190,6 +210,12 @@ final class OverlayPanelController {
     }
 
     func present() {
+        if isRetreated {
+            model.cancelPendingOperation()
+            restore()
+            Task { await model.reload() }
+            return
+        }
         guard !panel.isVisible else { close(); return }
         model.state = BrowserState(searchMode: model.state.searchMode)
         model.inputMode = settings.activeNavigationBindings.hasAdditionalKeys ? .list : .search
@@ -220,6 +246,8 @@ final class OverlayPanelController {
     }
 
     private func close() {
+        model.cancelPendingOperation()
+        isRetreated = false
         matcher.reset()
         model.cancelThumbnails()
         panel.orderOut(nil)
@@ -228,11 +256,13 @@ final class OverlayPanelController {
 
     private func retreat() {
         matcher.reset()
-        panel.orderBack(nil)
+        isRetreated = true
+        panel.orderOut(nil)
     }
 
     private func restore() {
-        guard panel.isVisible else { return }
+        guard isRetreated else { return }
+        isRetreated = false
         panel.makeKeyAndOrderFront(nil)
     }
 
@@ -299,8 +329,6 @@ final class OverlayPanelController {
         switch event.keyCode {
         case 123: return .moveLeft
         case 124: return .moveRight
-        case 125: return .moveDown
-        case 126: return .moveUp
         case 36, 76: return .confirm
         case 53: return .escape
         default:
@@ -313,7 +341,6 @@ final class OverlayPanelController {
 struct OverlayView: View {
     @ObservedObject var model: OverlayModel
     @FocusState private var searchFocused: Bool
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
 
     enum CardID: Hashable {
         case application(Int32)
@@ -342,7 +369,7 @@ struct OverlayView: View {
             footer
         }
         .padding(20)
-        .frame(minWidth: 760, minHeight: 480)
+        .frame(minWidth: 760, minHeight: model.permission == .ready ? 360 : 600)
         .background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 20))
         .onAppear { focusSearchIfNeeded() }
         .onChange(of: model.state.screen) { _, _ in focusSearchIfNeeded() }
@@ -407,21 +434,24 @@ struct OverlayView: View {
 
     private var cards: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVGrid(columns: columns, spacing: 12) {
+            ScrollView(.horizontal) {
+                HStack(spacing: 12) {
                     if case .applications = model.state.screen {
                         ForEach(Array(model.state.visibleApplications.enumerated()), id: \.element.id) { index, app in
                             AppCard(app: app, icon: model.icons[app.id], selected: index == model.state.selectedIndex)
+                                .frame(width: 280)
                                 .id(CardID.application(app.id))
                         }
                     } else {
                         ForEach(Array(model.state.visibleWindows.enumerated()), id: \.element.id) { index, window in
                             WindowCard(window: window, thumbnail: model.thumbnails[window.id], number: index < 9 ? index + 1 : nil, selected: index == model.state.selectedIndex)
+                                .frame(width: 280)
                                 .id(CardID.window(window.id))
                         }
                     }
                 }.padding(4)
             }
+            .frame(maxHeight: .infinity)
             .id(model.state.screen)
             .onAppear { scrollToSelection(with: proxy) }
             .onChange(of: model.state.selectedIndex) { _, _ in
@@ -460,7 +490,7 @@ struct OverlayView: View {
     private func scrollToFirstApplication(with proxy: ScrollViewProxy) {
         guard case .applications = model.state.screen,
               let id = model.state.visibleApplications.first?.id else { return }
-        proxy.scrollTo(CardID.application(id), anchor: .top)
+        proxy.scrollTo(CardID.application(id), anchor: .leading)
     }
 
     private func focusSearchIfNeeded() {
@@ -496,12 +526,12 @@ struct OverlayView: View {
         if case .applications = model.state.screen {
             if model.inputMode == .search {
                 return model.navigationBindings.hasAdditionalKeys
-                    ? "Type to search   ↑ ↓ Select   ⏎ Confirm   esc List"
-                    : "Type to search   ← ↑ ↓ → Select   ⏎ Confirm   esc Close"
+                    ? "Type to search   ← → Select   ⏎ Confirm   esc List"
+                    : "Type to search   ← → Select   ⏎ Confirm   esc Close"
             }
-            return "/ or ⌘F Search   ← ↑ ↓ → Select   ⏎ Confirm   esc Close"
+            return "/ or ⌘F Search   ← → Select   ⏎ Confirm   esc Close"
         }
-        return "← ↑ ↓ → Select   ⏎ Confirm   esc Applications"
+        return "← → Select   ⏎ Confirm   esc Applications"
     }
 
     private var modelFooterBindings: String {
