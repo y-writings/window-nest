@@ -59,6 +59,8 @@ struct OverlayNavigationTests {
         let cases: [(NSEvent, NavigationCommand)] = [
             (try key("\u{f702}", code: kVK_LeftArrow), .moveLeft),
             (try key("\u{f703}", code: kVK_RightArrow), .moveRight),
+            (try key("\u{f701}", code: kVK_DownArrow), .revealWindows),
+            (try key("\u{f700}", code: kVK_UpArrow), .concealWindows),
             (try key("\r", code: kVK_Return), .confirm),
             (try key("\u{1b}", code: kVK_Escape), .escape),
         ]
@@ -69,15 +71,36 @@ struct OverlayNavigationTests {
     }
 
     @Test(arguments: [BrowserScreen.applications, .windows(applicationID: 1)])
-    func formerVerticalKeysDoNotNavigate(screen: BrowserScreen) throws {
+    func downAndVimJRevealWindowsWhileUpAndKStayFree(screen: BrowserScreen) throws {
         var matcher = NavigationKeyMatcher(bindings: .vim)
-        for event in [try key("\u{f700}", code: kVK_UpArrow),
-                      try key("\u{f701}", code: kVK_DownArrow),
-                      try key("j", code: kVK_ANSI_J),
-                      try key("k", code: kVK_ANSI_K)] {
-            #expect(OverlayPanelController.match(for: event, screen: screen,
-                firstResponder: nil, matcher: &matcher) == .unhandled)
-        }
+        #expect(OverlayPanelController.match(for: try key("\u{f701}", code: kVK_DownArrow),
+            screen: screen, firstResponder: nil, matcher: &matcher) == .command(.revealWindows))
+        #expect(OverlayPanelController.match(for: try key("\u{f700}", code: kVK_UpArrow),
+            screen: screen, firstResponder: nil, matcher: &matcher) == .command(.concealWindows))
+        #expect(OverlayPanelController.match(for: try key("j", code: kVK_ANSI_J),
+            screen: screen, firstResponder: nil, matcher: &matcher) == .command(.revealWindows))
+        #expect(OverlayPanelController.match(for: try key("k", code: kVK_ANSI_K),
+            screen: screen, firstResponder: nil, matcher: &matcher) == .unhandled)
+    }
+
+    @Test func downArrowRevealsWindowsWhileSearchingAndVimJTypes() throws {
+        let editor = NSTextView()
+        var matcher = NavigationKeyMatcher(bindings: .vim)
+        #expect(OverlayPanelController.match(for: try key("\u{f701}", code: kVK_DownArrow),
+            screen: .applications, firstResponder: editor, matcher: &matcher) == .command(.revealWindows))
+        #expect(OverlayPanelController.match(for: try key("j", code: kVK_ANSI_J),
+            screen: .applications, firstResponder: editor, matcher: &matcher) == .unhandled)
+        #expect(OverlayPanelController.match(for: try key("j", code: kVK_ANSI_J),
+            screen: .applications, firstResponder: nil, matcher: &matcher) == .command(.revealWindows))
+    }
+
+    @Test func numbersSelectRevealedWindowsButRemainSearchInputOtherwise() throws {
+        var matcher = NavigationKeyMatcher(bindings: .standard)
+        let event = try key("1", code: kVK_ANSI_1)
+        #expect(OverlayPanelController.match(for: event, screen: .applications,
+            firstResponder: nil, windowsRevealed: true, matcher: &matcher) == .command(.chooseNumber(1)))
+        #expect(OverlayPanelController.match(for: event, screen: .applications,
+            firstResponder: NSTextView(), windowsRevealed: true, matcher: &matcher) == .unhandled)
     }
 
     @Test func escapeLeavesSearchBeforeClosingWhenAdditionalKeysExist() throws {

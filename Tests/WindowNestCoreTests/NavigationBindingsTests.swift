@@ -74,6 +74,8 @@ private func apps(_ count: Int) -> [ApplicationItem] {
     #expect(matcher.match(KeyStroke(key: "$", modifiers: .shift), at: 4) == .moveToListEnd)
     #expect(matcher.match(KeyStroke(key: "0"), at: 4.1) == .moveToListStart)
     #expect(matcher.match(KeyStroke(key: "4"), at: 5) == nil)
+    #expect(matcher.match(KeyStroke(key: "j"), at: 6) == .revealWindows)
+    #expect(matcher.match(KeyStroke(key: "k"), at: 7) == nil)
 }
 
 @Test func twoStrokeTimeoutMismatchAndRepeatAreDeterministic() {
@@ -143,9 +145,13 @@ private func apps(_ count: Int) -> [ApplicationItem] {
     defaults.set(data, forKey: "navigationBindings")
     let store = NavigationBindingsStore(defaults: defaults)
     let loaded = store.load()
+    var expected = NavigationBindings.vim
+    // Legacy up/down assignments stay discarded. `j` is not revived as the windows binding.
+    expected.assignments[.windows] = []
     for action in NavigationAction.allCases {
-        #expect(Set(loaded.assignments[action] ?? []) == Set(NavigationBindings.vim.assignments[action] ?? []))
+        #expect(Set(loaded.assignments[action] ?? []) == Set(expected.assignments[action] ?? []))
     }
+    #expect(loaded.assignments[.windows]?.isEmpty != false)
     #expect(defaults.data(forKey: "navigationBindings") == data)
     try store.save(loaded)
     #expect(store.load() == loaded)

@@ -30,6 +30,11 @@ struct OverlayCardIdentityTests {
         #expect(view.selectedCardID == .window(applications[0].windows[0].id))
         _ = model.state.handle(.moveRight)
         #expect(view.selectedCardID == .window(applications[0].windows[1].id))
+        _ = model.state.handle(.escape)
+        #expect(view.selectedCardID == .application(1))
+        #expect(model.state.handle(.revealWindows) == .none)
+        #expect(model.state.windowsRevealed)
+        #expect(view.selectedCardID == .window(applications[0].windows[0].id))
     }
 }
 #endif

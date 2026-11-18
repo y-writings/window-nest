@@ -218,6 +218,7 @@ private struct NavigationBindingRow: View {
         switch action {
         case .left: "Left"; case .right: "Right"
         case .listStart: "List start"; case .listEnd: "List end"
+        case .windows: "Windows"
         }
     }
     var body: some View {
