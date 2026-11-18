@@ -63,6 +63,57 @@ func everyIconFitsInOneRowWithoutHorizontalScrolling(appCount: Int) {
     #expect(layout.iconSize == SwitcherLayout.preferredIconSize)
 }
 
+@Test func screenRecordingNoticeLeavesTheRevealedWindowListVisible() {
+    let layout = SwitcherLayout.make(
+        appCount: 4, selectedIndex: 1, windowCount: 6,
+        windowsRevealed: true, content: .icons, showsPermissionBanner: true,
+        maxPanelWidth: 1400, maxPanelHeight: 900
+    )
+    #expect(layout.permissionBannerHeight == SwitcherLayout.permissionBannerHeight)
+    #expect(layout.windowListHeight >= SwitcherLayout.windowRowHeight)
+    #expect(layout.panelHeight <= 900)
+
+    let tight = SwitcherLayout.make(
+        appCount: 4, selectedIndex: 0, windowCount: 8,
+        windowsRevealed: true, content: .icons, showsPermissionBanner: true,
+        maxPanelWidth: 1400, maxPanelHeight: 520
+    )
+    #expect(tight.panelHeight <= 520)
+    #expect(tight.windowListHeight >= SwitcherLayout.windowRowHeight)
+    #expect(tight.permissionBannerHeight < SwitcherLayout.permissionBannerHeight)
+
+    let blocked = SwitcherLayout.make(
+        appCount: 4, selectedIndex: 0, windowCount: 3,
+        windowsRevealed: true, content: .permission,
+        maxPanelWidth: 1400, maxPanelHeight: 900
+    )
+    #expect(blocked.windowListHeight == 0)
+    #expect(blocked.permissionBannerHeight == 0)
+}
+
+@Test func growingPanelSlidesUpInsteadOfLeavingTheVisibleScreen() {
+    let visible = PanelRect(x: 0, y: 0, width: 1440, height: 800)
+    let current = PanelRect(x: 200, y: 400, width: 900, height: 220)
+    let placed = PanelPlacement.frame(current: current, width: 900, height: 700, visible: visible)
+    #expect(placed.width == 900)
+    #expect(placed.height == 700)
+    #expect(placed.y == 0)
+    #expect(placed.maxY <= visible.maxY)
+    #expect(placed.maxX <= visible.maxX)
+
+    let fitting = PanelPlacement.frame(current: current, width: 900, height: 300, visible: visible)
+    #expect(fitting.maxY == current.maxY)
+    #expect(fitting.y == current.maxY - 300)
+
+    let wide = PanelPlacement.frame(
+        current: PanelRect(x: 900, y: 100, width: 400, height: 200),
+        width: 800, height: 200, visible: visible
+    )
+    #expect(wide.maxX <= visible.maxX)
+    #expect(wide.x >= visible.x)
+    #expect(wide.width == 800)
+}
+
 @Test func fewApplicationsStillUseTheWidenedPanel() {
     let layout = SwitcherLayout.make(
         appCount: 2, selectedIndex: 0, windowCount: 1,

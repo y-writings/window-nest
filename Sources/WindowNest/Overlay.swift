@@ -20,8 +20,9 @@ final class OverlayModel: ObservableObject {
     @Published private(set) var activationFailure: String?
 
     var switcherLayout: SwitcherLayout {
+        let blocksList = permission == .accessibilityRequired || permission == .bothRequired
         let content: SwitcherLayout.Content
-        if permission != .ready {
+        if blocksList {
             content = .permission
         } else if case .windows = state.screen {
             content = .fullWindowList
@@ -36,6 +37,7 @@ final class OverlayModel: ObservableObject {
             windowCount: state.visibleWindows.count,
             windowsRevealed: state.windowsRevealed,
             content: content,
+            showsPermissionBanner: permission == .screenRecordingRequired,
             maxPanelWidth: viewportMaxWidth,
             maxPanelHeight: viewportMaxHeight
         )
@@ -314,18 +316,21 @@ final class OverlayPanelController {
         if model.viewportMaxHeight != maxHeight { model.viewportMaxHeight = maxHeight }
     }
 
-    /// Sizes the panel from `model.switcherLayout` without reading the screen.
+    /// Sizes the panel from `model.switcherLayout` and keeps that frame inside the visible screen.
     func resizePanelToLayout() {
         let layout = model.switcherLayout
-        let size = NSSize(width: CGFloat(layout.panelWidth), height: CGFloat(layout.panelHeight))
         let current = panel.frame
-        guard abs(current.width - size.width) >= 1 || abs(current.height - size.height) >= 1 else { return }
-        let widthChanged = abs(current.width - size.width) >= 1
-        panel.setContentSize(size)
-        var frame = panel.frame
-        frame.origin.x = widthChanged ? current.midX - frame.width / 2 : current.origin.x
-        frame.origin.y = current.maxY - frame.height
-        panel.setFrame(frame, display: true, animate: false)
+        let visible = (panel.screen ?? NSScreen.main)?.visibleFrame
+        let placed = PanelPlacement.frame(
+            current: PanelRect(current),
+            width: layout.panelWidth,
+            height: layout.panelHeight,
+            visible: visible.map(PanelRect.init)
+        )
+        let next = placed.nsRect
+        guard abs(current.width - next.width) >= 1 || abs(current.height - next.height) >= 1
+            || abs(current.minX - next.minX) >= 1 || abs(current.minY - next.minY) >= 1 else { return }
+        panel.setFrame(next, display: true, animate: false)
     }
 
     static func match(for event: NSEvent, screen: BrowserScreen, firstResponder: NSResponder?,
@@ -420,7 +425,13 @@ struct OverlayView: View {
         VStack(alignment: .leading, spacing: cg(SwitcherLayout.stackSpacing)) {
             dragHandle
             header
-            if model.permission != .ready { permissionView }
+            if model.permission == .screenRecordingRequired, model.switcherLayout.permissionBannerHeight > 0 {
+                permissionView
+                    .frame(height: cg(model.switcherLayout.permissionBannerHeight))
+                    .clipped()
+            } else if model.permission != .ready {
+                permissionView
+            }
             if model.permission == .accessibilityRequired || model.permission == .bothRequired {
                 Spacer()
             } else if model.loading && model.state.applications.isEmpty { ProgressView("Finding windows…").frame(maxWidth: .infinity, maxHeight: .infinity) }
@@ -667,6 +678,14 @@ struct OverlayView: View {
 }
 
 private func cg(_ value: Double) -> CGFloat { CGFloat(value) }
+
+private extension PanelRect {
+    init(_ rect: NSRect) {
+        self.init(x: Double(rect.origin.x), y: Double(rect.origin.y), width: Double(rect.size.width), height: Double(rect.size.height))
+    }
+
+    var nsRect: NSRect { NSRect(x: x, y: y, width: width, height: height) }
+}
 
 private struct WindowDragArea: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { DraggableView() }

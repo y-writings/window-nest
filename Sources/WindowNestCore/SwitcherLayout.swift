@@ -25,6 +25,8 @@ public struct SwitcherLayout: Equatable, Sendable {
     public var windowColumnWidth: Double
     public var windowListHeight: Double
     public var windowRowHeight: Double
+    /// Height reserved for the screen-recording notice shown above the icons. Zero when that notice is absent.
+    public var permissionBannerHeight: Double
     /// Always false. Icons are scaled into the panel instead of being scrolled.
     public var iconRowScrollsHorizontally: Bool
 
@@ -42,6 +44,7 @@ public struct SwitcherLayout: Equatable, Sendable {
     public static let fullWindowListBodyHeight = 260.0
     public static let messageBodyHeight = 200.0
     public static let permissionBodyHeight = 460.0
+    public static let permissionBannerHeight = 260.0
 
     public static var reservedHeight: Double {
         outerPadding * 2 + dragHandleHeight + headerHeight + footerHeight + stackSpacing * 3
@@ -55,6 +58,7 @@ public struct SwitcherLayout: Equatable, Sendable {
         windowCount: Int,
         windowsRevealed: Bool,
         content: Content,
+        showsPermissionBanner: Bool = false,
         maxPanelWidth: Double,
         maxPanelHeight: Double
     ) -> SwitcherLayout {
@@ -93,22 +97,47 @@ public struct SwitcherLayout: Equatable, Sendable {
         let revealed = windowsRevealed && windowCount > 0 && content == .icons
         let naturalList = Double(max(0, windowCount)) * windowRowHeight
             + Double(max(0, windowCount - 1)) * windowListSpacing
-        var windowListHeight = 0.0
-        let bodyHeight: Double
-        if content == .permission {
-            bodyHeight = permissionBodyHeight
-        } else if content == .message {
-            bodyHeight = messageBodyHeight
-        } else if content == .fullWindowList {
-            bodyHeight = fullWindowListBodyHeight
-        } else if revealed {
-            let available = maxPanelHeight - reservedHeight - iconSize - stackSpacing
-            windowListHeight = min(naturalList, max(windowRowHeight, available))
-            bodyHeight = iconSize + stackSpacing + windowListHeight
-        } else {
-            bodyHeight = iconSize
+        let minimumCards: Double
+        let idealCards: Double
+        switch content {
+        case .permission:
+            minimumCards = permissionBodyHeight
+            idealCards = permissionBodyHeight
+        case .message:
+            minimumCards = messageBodyHeight
+            idealCards = messageBodyHeight
+        case .fullWindowList:
+            minimumCards = min(160, fullWindowListBodyHeight)
+            idealCards = fullWindowListBodyHeight
+        case .icons:
+            if revealed {
+                let minimumList = min(naturalList, windowRowHeight)
+                minimumCards = iconSize + stackSpacing + minimumList
+                idealCards = iconSize + stackSpacing + naturalList
+            } else {
+                minimumCards = iconSize
+                idealCards = iconSize
+            }
         }
-        let panelHeight = min(maxPanelHeight, reservedHeight + bodyHeight)
+        let bannerWanted = showsPermissionBanner && content != .permission
+        var bannerHeight = bannerWanted ? permissionBannerHeight : 0
+        var cardsHeight = idealCards
+        func total(banner: Double, cards: Double) -> Double {
+            reservedHeight + (banner > 0 ? stackSpacing : 0) + banner + cards
+        }
+        if total(banner: bannerHeight, cards: cardsHeight) > maxPanelHeight {
+            let roomForCards = maxPanelHeight - reservedHeight - (bannerHeight > 0 ? stackSpacing + bannerHeight : 0)
+            if roomForCards >= minimumCards {
+                cardsHeight = min(idealCards, roomForCards)
+            } else {
+                cardsHeight = min(idealCards, minimumCards)
+                bannerHeight = max(0, maxPanelHeight - reservedHeight - stackSpacing - cardsHeight)
+                let room = maxPanelHeight - reservedHeight - (bannerHeight > 0 ? stackSpacing + bannerHeight : 0)
+                cardsHeight = min(cardsHeight, max(0, room))
+            }
+        }
+        let windowListHeight = revealed ? max(0, cardsHeight - iconSize - stackSpacing) : 0
+        let panelHeight = min(maxPanelHeight, total(banner: bannerHeight, cards: cardsHeight))
 
         return SwitcherLayout(
             panelWidth: panelWidth,
@@ -121,9 +150,49 @@ public struct SwitcherLayout: Equatable, Sendable {
             selectedIconCenterX: selectedIconCenterX,
             windowColumnOrigin: windowColumnOrigin,
             windowColumnWidth: windowColumnWidth,
-            windowListHeight: revealed ? windowListHeight : 0,
+            windowListHeight: windowListHeight,
             windowRowHeight: windowRowHeight,
+            permissionBannerHeight: bannerHeight,
             iconRowScrollsHorizontally: false
         )
+    }
+}
+
+public struct PanelRect: Equatable, Sendable {
+    public var x: Double
+    public var y: Double
+    public var width: Double
+    public var height: Double
+
+    public init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+
+    public var maxX: Double { x + width }
+    public var maxY: Double { y + height }
+}
+
+public enum PanelPlacement {
+    /// Keeps the panel's top edge while it grows, then shifts it so the whole frame stays inside `visible`.
+    public static func frame(current: PanelRect, width: Double, height: Double, visible: PanelRect?) -> PanelRect {
+        var width = max(0, width)
+        var height = max(0, height)
+        if let visible {
+            width = min(width, visible.width)
+            height = min(height, visible.height)
+        }
+        let widthChanged = abs(current.width - width) >= 0.5
+        var x = widthChanged ? current.x + current.width / 2 - width / 2 : current.x
+        var y = current.maxY - height
+        if let visible {
+            if x < visible.x { x = visible.x }
+            if x + width > visible.maxX { x = visible.maxX - width }
+            if y < visible.y { y = visible.y }
+            if y + height > visible.maxY { y = visible.maxY - height }
+        }
+        return PanelRect(x: x, y: y, width: width, height: height)
     }
 }
