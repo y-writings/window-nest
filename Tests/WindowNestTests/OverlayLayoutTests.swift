@@ -1,4 +1,5 @@
 #if os(macOS)
+import AppKit
 import Testing
 import WindowNestCore
 @testable import WindowNest
