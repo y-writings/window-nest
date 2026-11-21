@@ -3,9 +3,9 @@ class WindowNestNightly < Formula
   homepage "https://github.com/y-writings/window-nest"
   # The Nightly workflow replaces this pin with the latest nightly-* tag archive.
   # nightly-pin: begin
-  url "https://github.com/y-writings/window-nest/archive/refs/tags/nightly-2026.11.10.tar.gz"
-  version "2026.11.10"
-  sha256 "3d607d4beab7d206bb92b875302b4f5acf22863d3df27851b78fc68f9ea74d2b"
+  url "https://github.com/y-writings/window-nest/archive/refs/tags/nightly-2026.11.21.tar.gz"
+  version "2026.11.21"
+  sha256 "4d0441d4fbcefee0389d6afd3391a5c2c2daf3050f51c7dbaa1c42918fcdb607"
   # nightly-pin: end
   license "MIT"
 
