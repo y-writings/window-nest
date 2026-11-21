@@ -192,6 +192,7 @@ final class OverlayPanelController {
     private var matcher: NavigationKeyMatcher
     private var layoutObserver: AnyCancellable?
     private var navigationObserver: NSObjectProtocol?
+    private var screenObserver: NSObjectProtocol?
     private var resignObserver: NSObjectProtocol?
     private var searchModeObserver: AnyCancellable?
     private var isRetreated = false
@@ -235,6 +236,9 @@ final class OverlayPanelController {
         }
         resignObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.matcher.reset() }
+        }
+        screenObserver = NotificationCenter.default.addObserver(forName: NSWindow.didChangeScreenNotification, object: panel, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.noteScreenChange() }
         }
         searchModeObserver = NotificationCenter.default
             .publisher(for: .applicationSearchModeDidChange)
@@ -314,6 +318,14 @@ final class OverlayPanelController {
         let maxHeight = max(480.0, Double(visible.height) - 80)
         if model.viewportMaxWidth != maxWidth { model.viewportMaxWidth = maxWidth }
         if model.viewportMaxHeight != maxHeight { model.viewportMaxHeight = maxHeight }
+    }
+
+    /// Recalculates the layout from the screen the panel is on now.
+    /// Dragging onto a smaller display posts `didChangeScreen` without changing model state,
+    /// so the SwiftUI frame would otherwise keep the previous display's size and clip.
+    func noteScreenChange() {
+        updateViewportFromScreen()
+        resizePanelToLayout()
     }
 
     /// Sizes the panel from `model.switcherLayout` and keeps that frame inside the visible screen.
