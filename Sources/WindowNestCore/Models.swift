@@ -71,6 +71,10 @@ public enum NavigationCommand: Equatable, Sendable {
     case moveToListStart, moveToListEnd
     case chooseNumber(Int)
     case showWindows, terminateApplication, closeWindow
+    /// Show the selected app's windows under its icon, or move to the next one.
+    case revealWindows
+    /// Move to the previous window under the icon, or hide that list on the first item.
+    case concealWindows
 }
 
 public enum BrowserEffect: Equatable, Sendable {

@@ -1,13 +1,14 @@
 import Foundation
 
 public enum NavigationAction: String, CaseIterable, Codable, Sendable {
-    case left, right, listStart, listEnd
+    case left, right, listStart, listEnd, windows
     public var command: NavigationCommand {
         switch self {
         case .left: .moveLeft
         case .right: .moveRight
         case .listStart: .moveToListStart
         case .listEnd: .moveToListEnd
+        case .windows: .revealWindows
         }
     }
 }
@@ -97,6 +98,9 @@ public struct NavigationBindings: Codable, Equatable, Sendable {
         .left: [KeySequence([KeyStroke(key: "h")])], .right: [KeySequence([KeyStroke(key: "l")])],
         .listStart: [KeySequence([KeyStroke(key: "0")]), KeySequence([KeyStroke(key: "g"), KeyStroke(key: "g")])],
         .listEnd: [KeySequence([KeyStroke(key: "$", modifiers: .shift)]), KeySequence([KeyStroke(key: "g", modifiers: .shift)])],
+        // `j` matches Down. The raw value is `windows`, not the retired `down`
+        // action, so settings saved before vertical movement was removed stay discarded.
+        .windows: [KeySequence([KeyStroke(key: "j")])],
     ])
 }
 
@@ -115,7 +119,9 @@ public enum BindingConflict: Error, Equatable, CustomStringConvertible {
 }
 
 public enum NavigationBindingValidator {
-    public static let reservedKeys: Set<String> = ["left", "right", "return", "keypadEnter", "escape", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+    public static let reservedKeys: Set<String> = [
+        "left", "right", "up", "down", "return", "keypadEnter", "escape", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+    ]
     public static let reservedStrokes: Set<KeyStroke> = [
         KeyStroke(key: "q", modifiers: .command), KeyStroke(key: "w", modifiers: .command),
         KeyStroke(key: "return", modifiers: .command), KeyStroke(key: "keypadEnter", modifiers: .command),
